@@ -1,0 +1,16 @@
+[package]
+name = "winterwallet-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+
+[dependencies]
+solana-sha256-hasher = { workspace = true }
+
+[target.'cfg(not(any(target_arch = "bpf", target_os = "solana")))'.dependencies]
+solana-sha256-hasher = { workspace = true, features = ["sha2"] }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+pbkdf2 = { workspace = true }
+zeroize = { workspace = true }

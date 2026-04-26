@@ -1,0 +1,13 @@
+[package]
+name = "winterwallet-program"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pinocchio = { workspace = true }
+pinocchio-system = { workspace = true }
+solana-address = { workspace = true, features = ["decode"]}
+winterwallet-core = { workspace = true }
