@@ -5,12 +5,25 @@ use winterwallet_core::WinternitzKeypair;
 use crate::helpers;
 use crate::state::{self, WalletState};
 
-pub fn run(
-    keypair_path: &str,
-    rpc_url: &str,
-    json_output: bool,
-    dry_run: bool,
-) -> Result<(), String> {
+pub struct RunArgs<'a> {
+    pub keypair_path: &'a str,
+    pub rpc_url: &'a str,
+    pub commitment: &'a str,
+    pub json_output: bool,
+    pub dry_run: bool,
+    pub priority_fee_micro_lamports: u64,
+}
+
+pub fn run(args: RunArgs<'_>) -> Result<(), String> {
+    let RunArgs {
+        keypair_path,
+        rpc_url,
+        commitment,
+        json_output,
+        dry_run,
+        priority_fee_micro_lamports,
+    } = args;
+
     let payer = helpers::read_keypair(keypair_path)?;
     let mnemonic = helpers::read_mnemonic()?;
 
@@ -44,7 +57,7 @@ pub fn run(
         &zero_sig,
         next_root.as_bytes(),
     );
-    let preview = helpers::transaction_preview(&payer, &[preview_ix])?;
+    let preview = helpers::transaction_preview(&payer, &[preview_ix], priority_fee_micro_lamports)?;
 
     if dry_run {
         if json_output {
@@ -58,6 +71,8 @@ pub fn run(
                     "next_position": { "parent": 0, "child": 1 },
                     "estimated_transaction_size": preview.estimated_size,
                     "compute_unit_limit": preview.compute_unit_limit,
+                    "priority_fee_micro_lamports": preview.priority_fee_micro_lamports,
+                    "requires_signature_before_simulation": true,
                 })
             );
         } else {
@@ -66,8 +81,19 @@ pub fn run(
             println!("  Position:  (0, 1)");
             println!("  Tx size:   {} bytes", preview.estimated_size);
             println!("  CU limit:  {}", preview.compute_unit_limit);
+            println!(
+                "  Priority:  {} micro-lamports/CU",
+                preview.priority_fee_micro_lamports
+            );
+            println!("  Note:      live simulation requires signing and burns position (0, 0)");
         }
         return Ok(());
+    }
+
+    if !json_output {
+        eprintln!(
+            "Static checks passed. Signing burns position (0, 0); local state will be advanced before network submission."
+        );
     }
 
     let preimage = winterwallet_client::initialize_preimage();
@@ -94,7 +120,13 @@ pub fn run(
     };
     state::save(&wallet_state)?;
 
-    let signature = helpers::simulate_sign_send(rpc_url, &payer, &[ix])?;
+    let signature = helpers::simulate_sign_send(
+        rpc_url,
+        commitment,
+        &payer,
+        &[ix],
+        priority_fee_micro_lamports,
+    )?;
 
     if json_output {
         println!(
@@ -108,6 +140,7 @@ pub fn run(
                     "parent": wallet_state.parent,
                     "child": wallet_state.child,
                 },
+                "position_persisted_before_send": true,
             })
         );
     } else {

@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 use solana_address::Address;
 use solana_instruction::Instruction;
 use winterwallet_client::{
-    DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, validate_legacy_transaction_size,
-    validate_payer_only_signers, with_compute_budget,
+    AdvanceSender, DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, PersistedAdvance,
+    validate_legacy_transaction_size, validate_payer_only_signers, with_compute_budget,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -47,6 +47,13 @@ pub fn pubkey(key: &SigningKey) -> Address {
     Address::from(key.verifying_key().to_bytes())
 }
 
+pub fn validate_commitment(commitment: &str) -> Result<(), String> {
+    match commitment {
+        "processed" | "confirmed" | "finalized" => Ok(()),
+        _ => Err("commitment must be one of: processed, confirmed, finalized".to_string()),
+    }
+}
+
 // ── RPC helpers (sync, ureq) ─────────────────────────────────────────
 
 pub fn rpc_post(rpc_url: &str, method: &str, params: Value) -> Result<Value, String> {
@@ -73,11 +80,12 @@ pub fn rpc_post(rpc_url: &str, method: &str, params: Value) -> Result<Value, Str
         .ok_or_else(|| "RPC response missing 'result'".to_string())
 }
 
-pub fn get_latest_blockhash(rpc_url: &str) -> Result<[u8; 32], String> {
+pub fn get_latest_blockhash(rpc_url: &str, commitment: &str) -> Result<[u8; 32], String> {
+    validate_commitment(commitment)?;
     let result = rpc_post(
         rpc_url,
         "getLatestBlockhash",
-        json!([{"commitment": "confirmed"}]),
+        json!([{"commitment": commitment}]),
     )?;
     let hash_str = result["value"]["blockhash"]
         .as_str()
@@ -85,11 +93,16 @@ pub fn get_latest_blockhash(rpc_url: &str) -> Result<[u8; 32], String> {
     bs58_decode_32(hash_str)
 }
 
-pub fn get_account(rpc_url: &str, address: &Address) -> Result<AccountResult, String> {
+pub fn get_account(
+    rpc_url: &str,
+    commitment: &str,
+    address: &Address,
+) -> Result<AccountResult, String> {
+    validate_commitment(commitment)?;
     let result = rpc_post(
         rpc_url,
         "getAccountInfo",
-        json!([address.to_string(), {"encoding": "base64", "commitment": "confirmed"}]),
+        json!([address.to_string(), {"encoding": "base64", "commitment": commitment}]),
     )?;
 
     if result["value"].is_null() {
@@ -118,42 +131,55 @@ pub struct AccountResult {
 pub struct TransactionPreview {
     pub estimated_size: usize,
     pub compute_unit_limit: u32,
+    pub priority_fee_micro_lamports: u64,
 }
 
 pub fn transaction_preview(
     payer: &SigningKey,
     instructions: &[Instruction],
+    priority_fee_micro_lamports: u64,
 ) -> Result<TransactionPreview, String> {
     let payer_addr = pubkey(payer);
-    let final_ixs = with_compute_budget(instructions, DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0);
+    let final_ixs = with_compute_budget(
+        instructions,
+        DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
+        priority_fee_micro_lamports,
+    );
     validate_payer_only_signers(&payer_addr, &final_ixs).map_err(|e| e.to_string())?;
     let estimated_size =
         validate_legacy_transaction_size(&payer_addr, &final_ixs).map_err(|e| e.to_string())?;
     Ok(TransactionPreview {
         estimated_size,
         compute_unit_limit: DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
+        priority_fee_micro_lamports,
     })
 }
 
 /// Add compute budget, validate size/signers, simulate, sign, send, and confirm.
 pub fn simulate_sign_send(
     rpc_url: &str,
+    commitment: &str,
     payer: &SigningKey,
     instructions: &[Instruction],
+    priority_fee_micro_lamports: u64,
 ) -> Result<String, String> {
     let payer_addr = pubkey(payer);
-    let final_ixs = with_compute_budget(instructions, DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0);
+    let final_ixs = with_compute_budget(
+        instructions,
+        DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
+        priority_fee_micro_lamports,
+    );
     validate_payer_only_signers(&payer_addr, &final_ixs).map_err(|e| e.to_string())?;
     validate_legacy_transaction_size(&payer_addr, &final_ixs).map_err(|e| e.to_string())?;
 
     // Simulate the exact transaction shape with zeroed transaction signatures.
-    let blockhash = get_latest_blockhash(rpc_url)?;
+    let blockhash = get_latest_blockhash(rpc_url, commitment)?;
     let message = build_message(&payer_addr, &final_ixs, &blockhash);
     let unsigned_tx = build_unsigned_wire_tx(&message, 1);
-    simulate_transaction(rpc_url, &unsigned_tx)?;
+    simulate_transaction(rpc_url, commitment, &unsigned_tx)?;
 
     // Rebuild with a fresh blockhash before signing.
-    let blockhash = get_latest_blockhash(rpc_url)?;
+    let blockhash = get_latest_blockhash(rpc_url, commitment)?;
     let message = build_message(&payer_addr, &final_ixs, &blockhash);
     let signature = payer.sign(&message);
 
@@ -164,12 +190,12 @@ pub fn simulate_sign_send(
     Ok(tx_sig)
 }
 
-fn simulate_transaction(rpc_url: &str, wire_tx: &[u8]) -> Result<(), String> {
+fn simulate_transaction(rpc_url: &str, commitment: &str, wire_tx: &[u8]) -> Result<(), String> {
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, wire_tx);
     let result = rpc_post(
         rpc_url,
         "simulateTransaction",
-        json!([b64, {"encoding": "base64", "sigVerify": false, "commitment": "confirmed"}]),
+        json!([b64, {"encoding": "base64", "sigVerify": false, "commitment": commitment}]),
     )?;
 
     if let Some(err) = result["value"]["err"].as_object() {
@@ -186,6 +212,30 @@ fn simulate_transaction(rpc_url: &str, wire_tx: &[u8]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub struct RpcAdvanceSender<'a> {
+    pub rpc_url: &'a str,
+    pub commitment: &'a str,
+    pub payer: &'a SigningKey,
+    pub priority_fee_micro_lamports: u64,
+}
+
+impl AdvanceSender for RpcAdvanceSender<'_> {
+    type Error = String;
+
+    fn send_persisted_advance(
+        &mut self,
+        advance: &PersistedAdvance,
+    ) -> Result<String, Self::Error> {
+        simulate_sign_send(
+            self.rpc_url,
+            self.commitment,
+            self.payer,
+            &[advance.advance_instruction()],
+            self.priority_fee_micro_lamports,
+        )
+    }
 }
 
 fn send_transaction(rpc_url: &str, wire_tx: &[u8]) -> Result<String, String> {

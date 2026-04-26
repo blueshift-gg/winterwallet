@@ -1,35 +1,12 @@
 use winterwallet_client::{
-    AdvancePlan, WinterWalletAccount, find_wallet_address, wallet_id_from_mnemonic,
+    SigningPosition, WinterWallet, WinterWalletAccount, find_wallet_address,
+    wallet_id_from_mnemonic,
 };
 use winterwallet_common::{SIGNATURE_LEN, WINTERNITZ_SCALARS};
 use winterwallet_core::WinternitzKeypair;
 
 use crate::helpers;
-use crate::state::{self, WalletState};
-
-/// Build an SPL Token Transfer instruction (discriminator 3, amount as u64 LE).
-fn spl_transfer_ix(
-    source: &solana_address::Address,
-    destination: &solana_address::Address,
-    authority: &solana_address::Address,
-    amount: u64,
-    token_program: &solana_address::Address,
-) -> solana_instruction::Instruction {
-    let mut data = Vec::with_capacity(9);
-    data.push(3); // SPL Token Transfer
-    data.extend_from_slice(&amount.to_le_bytes());
-
-    solana_instruction::Instruction {
-        program_id: *token_program,
-        accounts: vec![
-            solana_instruction::AccountMeta::new(*source, false),
-            solana_instruction::AccountMeta::new(*destination, false),
-            // Authority: is_signer=false because invoke_signed promotes the PDA.
-            solana_instruction::AccountMeta::new_readonly(*authority, false),
-        ],
-        data,
-    }
-}
+use crate::state::{self, StateStore};
 
 pub struct RunArgs<'a> {
     pub keypair_path: &'a str,
@@ -37,9 +14,11 @@ pub struct RunArgs<'a> {
     pub mint: &'a str,
     pub amount: u64,
     pub rpc_url: &'a str,
+    pub commitment: &'a str,
     pub token_program: &'a str,
     pub json_output: bool,
     pub dry_run: bool,
+    pub priority_fee_micro_lamports: u64,
 }
 
 pub fn run(args: RunArgs<'_>) -> Result<(), String> {
@@ -49,9 +28,11 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
         mint,
         amount,
         rpc_url,
+        commitment,
         token_program,
         json_output,
         dry_run,
+        priority_fee_micro_lamports,
     } = args;
 
     if amount == 0 {
@@ -69,23 +50,16 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
     let local_state = state::load(&wallet_id_hex)?
         .ok_or("no local state found — run `winterwallet init` first")?;
 
-    let account = helpers::get_account(rpc_url, &pda)?;
+    let account = helpers::get_account(rpc_url, commitment, &pda)?;
     let on_chain = WinterWalletAccount::from_bytes(&account.data)
         .map_err(|e| format!("failed to deserialize wallet: {e}"))?;
+    if on_chain.id != wallet_id {
+        return Err("on-chain wallet ID does not match mnemonic-derived PDA".to_string());
+    }
 
     let mut keypair =
         WinternitzKeypair::from_mnemonic_at(&mnemonic, 0, local_state.parent, local_state.child)
             .map_err(|e| format!("invalid mnemonic: {e}"))?;
-
-    let current_root = keypair
-        .derive::<WINTERNITZ_SCALARS>()
-        .to_pubkey()
-        .merklize();
-    if current_root != on_chain.root {
-        return Err(
-            "on-chain root does not match local state — run `winterwallet recover`".to_string(),
-        );
-    }
 
     let new_root = WinternitzKeypair::from_mnemonic_at(
         &mnemonic,
@@ -109,12 +83,23 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
     let source_ata = derive_ata(&pda, &mint_addr, &token_program);
     let dest_ata = derive_ata(&dest_owner, &mint_addr, &token_program);
 
-    let inner = spl_transfer_ix(&source_ata, &dest_ata, &pda, amount, &token_program);
-    let plan = AdvancePlan::new(&pda, new_root.as_bytes(), &[inner]).map_err(|e| format!("{e}"))?;
+    let wallet = WinterWallet::from_account(
+        &on_chain,
+        SigningPosition::new(0, local_state.parent, local_state.child),
+    );
+    let unsigned = wallet
+        .transfer_plan(
+            &source_ata,
+            &dest_ata,
+            &token_program,
+            amount,
+            new_root.as_bytes(),
+        )
+        .map_err(|e| format!("{e}"))?;
 
     let zero_sig = [0u8; SIGNATURE_LEN];
-    let preview_ix = plan.instruction(&zero_sig);
-    let preview = helpers::transaction_preview(&payer, &[preview_ix])?;
+    let preview_ix = unsigned.plan().instruction(&zero_sig);
+    let preview = helpers::transaction_preview(&payer, &[preview_ix], priority_fee_micro_lamports)?;
 
     if dry_run {
         if json_output {
@@ -137,6 +122,8 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
                     },
                     "estimated_transaction_size": preview.estimated_size,
                     "compute_unit_limit": preview.compute_unit_limit,
+                    "priority_fee_micro_lamports": preview.priority_fee_micro_lamports,
+                    "requires_signature_before_simulation": true,
                 })
             );
         } else {
@@ -151,29 +138,39 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
             );
             println!("  Tx size:   {} bytes", preview.estimated_size);
             println!("  CU limit:  {}", preview.compute_unit_limit);
+            println!(
+                "  Priority:  {} micro-lamports/CU",
+                preview.priority_fee_micro_lamports
+            );
+            println!(
+                "  Note:      live simulation requires signing and burns position ({}, {})",
+                local_state.parent, local_state.child
+            );
         }
         return Ok(());
     }
 
-    let preimage = plan.preimage(&wallet_id, current_root.as_bytes());
+    if !json_output {
+        eprintln!(
+            "Static checks passed. Signing burns position ({}, {}); local state will be advanced before network submission.",
+            local_state.parent, local_state.child
+        );
+    }
 
-    let sig = keypair.sign_and_increment::<WINTERNITZ_SCALARS>(&preimage);
-    let sig_bytes: &[u8; SIGNATURE_LEN] = sig
-        .as_bytes()
-        .try_into()
-        .map_err(|_| "signature size mismatch")?;
-
-    let advance_ix = plan.instruction(sig_bytes);
-
-    let new_state = WalletState {
-        wallet_id: wallet_id_hex,
-        pda: pda.to_string(),
-        parent: keypair.parent(),
-        child: keypair.child(),
+    let signed = unsigned
+        .sign(&mut keypair)
+        .map_err(|e| format!("{e}. Run `winterwallet recover` if local state is stale."))?;
+    let mut store = StateStore;
+    let persisted = signed.persist(&mut store)?;
+    let next_position = persisted.signed().next_position();
+    let mut sender = helpers::RpcAdvanceSender {
+        rpc_url,
+        commitment,
+        payer: &payer,
+        priority_fee_micro_lamports,
     };
-    state::save(&new_state)?;
-
-    let signature = helpers::simulate_sign_send(rpc_url, &payer, &[advance_ix])
+    let signature = persisted
+        .send(&mut sender)
         .map_err(|e| format!("{e}\n  Position burned. Run `winterwallet recover` if needed."))?;
 
     if json_output {
@@ -181,7 +178,7 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
             "{}",
             serde_json::json!({
                 "action": "transfer",
-                "wallet_id": new_state.wallet_id,
+                "wallet_id": wallet_id_hex,
                 "pda": pda.to_string(),
                 "recipient_owner": dest_owner.to_string(),
                 "mint": mint_addr.to_string(),
@@ -191,10 +188,11 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
                 "token_program": token_program.to_string(),
                 "signature": signature,
                 "position": {
-                    "parent": new_state.parent,
-                    "child": new_state.child,
+                    "parent": next_position.parent(),
+                    "child": next_position.child(),
                 },
                 "estimated_transaction_size": preview.estimated_size,
+                "position_persisted_before_send": true,
             })
         );
     } else {
@@ -203,7 +201,11 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
         println!("  Source:    {source_ata}");
         println!("  Dest:      {dest_ata}");
         println!("  Tx:        {signature}");
-        println!("  Position:  ({}, {})", new_state.parent, new_state.child);
+        println!(
+            "  Position:  ({}, {})",
+            next_position.parent(),
+            next_position.child()
+        );
     }
 
     Ok(())

@@ -28,6 +28,14 @@ struct Cli {
     #[arg(long, global = true)]
     dry_run: bool,
 
+    /// RPC commitment level.
+    #[arg(long, global = true, default_value = "confirmed")]
+    commitment: String,
+
+    /// Compute unit price in micro-lamports for Advance transactions.
+    #[arg(long, global = true, default_value_t = 0)]
+    priority_fee: u64,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -79,17 +87,56 @@ enum Command {
 
     /// Display wallet info: ID, PDA, balance, root, position.
     Info,
+
+    /// Inspect or repair local CLI state.
+    State {
+        #[command(subcommand)]
+        command: StateCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum StateCommand {
+    /// Show local state for the entered mnemonic.
+    Show,
+
+    /// Print the local state directory path.
+    Path,
+
+    /// Repair local state by scanning on-chain root position.
+    Repair {
+        /// Maximum child positions to scan.
+        #[arg(long, default_value = "10000")]
+        max_depth: u32,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    let result = match &cli.command {
+    let result = helpers::validate_commitment(&cli.commitment).and_then(|_| match &cli.command {
         Command::Create => commands::create::run(cli.json),
-        Command::Init => required_keypair(&cli)
-            .and_then(|keypair| commands::init::run(keypair, &cli.rpc_url, cli.json, cli.dry_run)),
+        Command::Init => required_keypair(&cli).and_then(|keypair| {
+            commands::init::run(commands::init::RunArgs {
+                keypair_path: keypair,
+                rpc_url: &cli.rpc_url,
+                commitment: &cli.commitment,
+                json_output: cli.json,
+                dry_run: cli.dry_run,
+                priority_fee_micro_lamports: cli.priority_fee,
+            })
+        }),
         Command::Withdraw { to, amount } => required_keypair(&cli).and_then(|keypair| {
-            commands::withdraw::run(keypair, to, *amount, &cli.rpc_url, cli.json, cli.dry_run)
+            commands::withdraw::run(commands::withdraw::RunArgs {
+                keypair_path: keypair,
+                to,
+                amount: *amount,
+                rpc_url: &cli.rpc_url,
+                commitment: &cli.commitment,
+                json_output: cli.json,
+                dry_run: cli.dry_run,
+                priority_fee_micro_lamports: cli.priority_fee,
+            })
         }),
         Command::Transfer {
             to,
@@ -103,16 +150,25 @@ fn main() {
                 mint,
                 amount: *amount,
                 rpc_url: &cli.rpc_url,
+                commitment: &cli.commitment,
                 token_program,
                 json_output: cli.json,
                 dry_run: cli.dry_run,
+                priority_fee_micro_lamports: cli.priority_fee,
             })
         }),
         Command::Recover { max_depth } => {
-            commands::recover::run(&cli.rpc_url, *max_depth, cli.json)
+            commands::recover::run(&cli.rpc_url, &cli.commitment, *max_depth, cli.json)
         }
-        Command::Info => commands::info::run(&cli.rpc_url, cli.json),
-    };
+        Command::Info => commands::info::run(&cli.rpc_url, &cli.commitment, cli.json),
+        Command::State { command } => match command {
+            StateCommand::Show => commands::state::show(cli.json),
+            StateCommand::Path => commands::state::path(cli.json),
+            StateCommand::Repair { max_depth } => {
+                commands::recover::run(&cli.rpc_url, &cli.commitment, *max_depth, cli.json)
+            }
+        },
+    });
 
     if let Err(e) = result {
         eprintln!("error: {e}");

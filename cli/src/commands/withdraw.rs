@@ -1,20 +1,36 @@
 use winterwallet_client::{
-    AdvancePlan, WinterWalletAccount, find_wallet_address, wallet_id_from_mnemonic,
+    SigningPosition, WinterWallet, WinterWalletAccount, find_wallet_address,
+    wallet_id_from_mnemonic,
 };
 use winterwallet_common::{SIGNATURE_LEN, WINTERNITZ_SCALARS};
 use winterwallet_core::WinternitzKeypair;
 
 use crate::helpers;
-use crate::state::{self, WalletState};
+use crate::state::{self, StateStore};
 
-pub fn run(
-    keypair_path: &str,
-    to: &str,
-    amount: u64,
-    rpc_url: &str,
-    json_output: bool,
-    dry_run: bool,
-) -> Result<(), String> {
+pub struct RunArgs<'a> {
+    pub keypair_path: &'a str,
+    pub to: &'a str,
+    pub amount: u64,
+    pub rpc_url: &'a str,
+    pub commitment: &'a str,
+    pub json_output: bool,
+    pub dry_run: bool,
+    pub priority_fee_micro_lamports: u64,
+}
+
+pub fn run(args: RunArgs<'_>) -> Result<(), String> {
+    let RunArgs {
+        keypair_path,
+        to,
+        amount,
+        rpc_url,
+        commitment,
+        json_output,
+        dry_run,
+        priority_fee_micro_lamports,
+    } = args;
+
     if amount == 0 {
         return Err("amount must be greater than zero".to_string());
     }
@@ -30,25 +46,17 @@ pub fn run(
     let local_state = state::load(&wallet_id_hex)?
         .ok_or("no local state found — run `winterwallet init` first")?;
 
-    let account = helpers::get_account(rpc_url, &pda)?;
+    let account = helpers::get_account(rpc_url, commitment, &pda)?;
     let on_chain = WinterWalletAccount::from_bytes(&account.data)
         .map_err(|e| format!("failed to deserialize wallet: {e}"))?;
+    if on_chain.id != wallet_id {
+        return Err("on-chain wallet ID does not match mnemonic-derived PDA".to_string());
+    }
 
     // Resume keypair at stored position.
     let mut keypair =
         WinternitzKeypair::from_mnemonic_at(&mnemonic, 0, local_state.parent, local_state.child)
             .map_err(|e| format!("invalid mnemonic: {e}"))?;
-
-    // Verify root matches on-chain.
-    let current_root = keypair
-        .derive::<WINTERNITZ_SCALARS>()
-        .to_pubkey()
-        .merklize();
-    if current_root != on_chain.root {
-        return Err(
-            "on-chain root does not match local state — run `winterwallet recover`".to_string(),
-        );
-    }
 
     // Root for the position AFTER signing.
     let new_root = WinternitzKeypair::from_mnemonic_at(
@@ -66,12 +74,17 @@ pub fn run(
         .parse()
         .map_err(|e| format!("invalid receiver address: {e}"))?;
 
-    let plan = AdvancePlan::withdraw(&pda, &receiver, amount, new_root.as_bytes())
+    let wallet = WinterWallet::from_account(
+        &on_chain,
+        SigningPosition::new(0, local_state.parent, local_state.child),
+    );
+    let unsigned = wallet
+        .withdraw_plan(&receiver, amount, new_root.as_bytes())
         .map_err(|e| format!("advance plan error: {e}"))?;
 
     let zero_sig = [0u8; SIGNATURE_LEN];
-    let preview_ix = plan.instruction(&zero_sig);
-    let preview = helpers::transaction_preview(&payer, &[preview_ix])?;
+    let preview_ix = unsigned.plan().instruction(&zero_sig);
+    let preview = helpers::transaction_preview(&payer, &[preview_ix], priority_fee_micro_lamports)?;
 
     if dry_run {
         if json_output {
@@ -90,6 +103,8 @@ pub fn run(
                     },
                     "estimated_transaction_size": preview.estimated_size,
                     "compute_unit_limit": preview.compute_unit_limit,
+                    "priority_fee_micro_lamports": preview.priority_fee_micro_lamports,
+                    "requires_signature_before_simulation": true,
                 })
             );
         } else {
@@ -103,30 +118,39 @@ pub fn run(
             );
             println!("  Tx size:   {} bytes", preview.estimated_size);
             println!("  CU limit:  {}", preview.compute_unit_limit);
+            println!(
+                "  Priority:  {} micro-lamports/CU",
+                preview.priority_fee_micro_lamports
+            );
+            println!(
+                "  Note:      live simulation requires signing and burns position ({}, {})",
+                local_state.parent, local_state.child
+            );
         }
         return Ok(());
     }
 
-    let preimage = plan.preimage(&wallet_id, current_root.as_bytes());
+    if !json_output {
+        eprintln!(
+            "Static checks passed. Signing burns position ({}, {}); local state will be advanced before network submission.",
+            local_state.parent, local_state.child
+        );
+    }
 
-    let sig = keypair.sign_and_increment::<WINTERNITZ_SCALARS>(&preimage);
-    let sig_bytes: &[u8; SIGNATURE_LEN] = sig
-        .as_bytes()
-        .try_into()
-        .map_err(|_| "signature size mismatch")?;
-
-    let advance_ix = plan.instruction(sig_bytes);
-
-    // Persist BEFORE sending.
-    let new_state = WalletState {
-        wallet_id: wallet_id_hex,
-        pda: pda.to_string(),
-        parent: keypair.parent(),
-        child: keypair.child(),
+    let signed = unsigned
+        .sign(&mut keypair)
+        .map_err(|e| format!("{e}. Run `winterwallet recover` if local state is stale."))?;
+    let mut store = StateStore;
+    let persisted = signed.persist(&mut store)?;
+    let next_position = persisted.signed().next_position();
+    let mut sender = helpers::RpcAdvanceSender {
+        rpc_url,
+        commitment,
+        payer: &payer,
+        priority_fee_micro_lamports,
     };
-    state::save(&new_state)?;
-
-    let signature = helpers::simulate_sign_send(rpc_url, &payer, &[advance_ix])
+    let signature = persisted
+        .send(&mut sender)
         .map_err(|e| format!("{e}\n  Position burned. Run `winterwallet recover` if needed."))?;
 
     if json_output {
@@ -134,16 +158,17 @@ pub fn run(
             "{}",
             serde_json::json!({
                 "action": "withdraw",
-                "wallet_id": new_state.wallet_id,
+                "wallet_id": wallet_id_hex,
                 "pda": pda.to_string(),
                 "receiver": receiver.to_string(),
                 "amount": amount,
                 "signature": signature,
                 "position": {
-                    "parent": new_state.parent,
-                    "child": new_state.child,
+                    "parent": next_position.parent(),
+                    "child": next_position.child(),
                 },
                 "estimated_transaction_size": preview.estimated_size,
+                "position_persisted_before_send": true,
             })
         );
     } else {
@@ -151,7 +176,11 @@ pub fn run(
         println!("  Amount:    {amount} lamports");
         println!("  Receiver:  {to}");
         println!("  Tx:        {signature}");
-        println!("  Position:  ({}, {})", new_state.parent, new_state.child);
+        println!(
+            "  Position:  ({}, {})",
+            next_position.parent(),
+            next_position.child()
+        );
     }
 
     Ok(())

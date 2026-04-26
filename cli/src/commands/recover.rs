@@ -5,7 +5,12 @@ use winterwallet_core::WinternitzKeypair;
 use crate::helpers;
 use crate::state::{self, WalletState};
 
-pub fn run(rpc_url: &str, max_depth: u32, json_output: bool) -> Result<(), String> {
+pub fn run(
+    rpc_url: &str,
+    commitment: &str,
+    max_depth: u32,
+    json_output: bool,
+) -> Result<(), String> {
     let mnemonic = helpers::read_mnemonic()?;
 
     let wallet_id = wallet_id_from_mnemonic(&mnemonic)
@@ -13,7 +18,7 @@ pub fn run(rpc_url: &str, max_depth: u32, json_output: bool) -> Result<(), Strin
     let wallet_id_hex = state::hex_encode(&wallet_id);
     let (pda, _bump) = find_wallet_address(&wallet_id);
 
-    let account = helpers::get_account(rpc_url, &pda)?;
+    let account = helpers::get_account(rpc_url, commitment, &pda)?;
     let on_chain = WinterWalletAccount::from_bytes(&account.data)
         .map_err(|e| format!("failed to deserialize wallet: {e}"))?;
 
@@ -21,8 +26,11 @@ pub fn run(rpc_url: &str, max_depth: u32, json_output: bool) -> Result<(), Strin
 
     eprintln!("Scanning positions 1 through {max_depth}...");
 
+    let started = std::time::Instant::now();
+    let mut scanned = 0u32;
     let mut found = None;
     for child in 1..=max_depth {
+        scanned = child;
         let kp = WinternitzKeypair::from_mnemonic_at(&mnemonic, 0, 0, child)
             .map_err(|e| format!("derivation error: {e}"))?;
         let root = kp.derive::<WINTERNITZ_SCALARS>().to_pubkey().merklize();
@@ -39,6 +47,13 @@ pub fn run(rpc_url: &str, max_depth: u32, json_output: bool) -> Result<(), Strin
 
     match found {
         Some(child) => {
+            let elapsed = started.elapsed();
+            let elapsed_ms = elapsed.as_millis();
+            let rate = if elapsed.as_secs_f64() > 0.0 {
+                scanned as f64 / elapsed.as_secs_f64()
+            } else {
+                scanned as f64
+            };
             let wallet_state = WalletState {
                 wallet_id: wallet_id_hex.clone(),
                 pda: pda.to_string(),
@@ -58,12 +73,16 @@ pub fn run(rpc_url: &str, max_depth: u32, json_output: bool) -> Result<(), Strin
                             "parent": 0,
                             "child": child,
                         },
+                        "scanned_positions": scanned,
+                        "elapsed_ms": elapsed_ms,
+                        "positions_per_second": rate,
                     })
                 );
             } else {
                 println!("Recovery successful!");
                 println!("  Next signing position: {child}");
                 println!("  PDA: {pda}");
+                println!("  Scanned: {scanned} positions in {elapsed_ms} ms ({rate:.1}/s)");
             }
         }
         None => {

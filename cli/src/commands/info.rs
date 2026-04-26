@@ -3,7 +3,7 @@ use winterwallet_client::{WinterWalletAccount, find_wallet_address, wallet_id_fr
 use crate::helpers;
 use crate::state;
 
-pub fn run(rpc_url: &str, json_output: bool) -> Result<(), String> {
+pub fn run(rpc_url: &str, commitment: &str, json_output: bool) -> Result<(), String> {
     let mnemonic = helpers::read_mnemonic()?;
 
     let wallet_id = wallet_id_from_mnemonic(&mnemonic)
@@ -13,7 +13,7 @@ pub fn run(rpc_url: &str, json_output: bool) -> Result<(), String> {
     let (pda, bump) = find_wallet_address(&wallet_id);
 
     let local_state = state::load(&wallet_id_hex)?;
-    let account = helpers::get_account(rpc_url, &pda).ok();
+    let account = helpers::get_account(rpc_url, commitment, &pda).ok();
     let wallet = account
         .as_ref()
         .and_then(|account| WinterWalletAccount::from_bytes(&account.data).ok());
