@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { sha256 } from "@noble/hashes/sha256";
 import {
+  DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
   SIGNATURE_LEN,
   WALLET_ACCOUNT_LEN,
   WINTERWALLET_PROGRAM_ID,
@@ -328,3 +331,66 @@ describe("transaction helpers", () => {
     expect(assertLegacyTransactionSize(payer, instructions)).toBe(size);
   });
 });
+
+describe("shared golden vectors", () => {
+  it("matches the Advance(Withdraw) fixture", () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL("../../../fixtures/advance-withdraw.json", import.meta.url),
+        "utf8"
+      )
+    );
+
+    const walletId = hexToBytes(fixture.wallet_id);
+    const currentRoot = hexToBytes(fixture.current_root);
+    const newRoot = hexToBytes(fixture.new_root);
+    const payer = new PublicKey(fixture.payer);
+    const receiver = new PublicKey(fixture.receiver);
+    const [walletPda, bump] = findWinterWalletPda(walletId);
+
+    expect(walletPda.toBase58()).toBe(fixture.wallet_pda);
+    expect(bump).toBe(fixture.wallet_bump);
+
+    const plan = createWithdrawPlan({
+      walletPda,
+      receiver,
+      lamports: BigInt(fixture.lamports),
+      newRoot,
+    });
+
+    expect(hex(plan.payload)).toBe(fixture.payload);
+    expectMetas(plan.accounts, fixture.passthrough_accounts);
+    expect(hex(plan.digest(walletId, currentRoot))).toBe(fixture.advance_digest);
+
+    const ix = plan.createInstruction(new Uint8Array(SIGNATURE_LEN));
+    expect(ix.data.length).toBe(fixture.advance_instruction_data_len);
+    expect(hex(sha256(ix.data))).toBe(fixture.advance_instruction_data_sha256);
+    expectMetas(ix.keys, fixture.advance_instruction_accounts);
+
+    const txSize = estimateLegacyTransactionSize(
+      payer,
+      withComputeBudget([ix], DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0n)
+    );
+    expect(txSize).toBe(fixture.legacy_transaction_size);
+  });
+});
+
+function hex(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex");
+}
+
+function hexToBytes(value: string): Uint8Array {
+  return Uint8Array.from(Buffer.from(value, "hex"));
+}
+
+function expectMetas(
+  actual: { pubkey: PublicKey; isSigner: boolean; isWritable: boolean }[],
+  expected: { pubkey: string; is_signer: boolean; is_writable: boolean }[]
+): void {
+  expect(actual.length).toBe(expected.length);
+  for (let i = 0; i < actual.length; i++) {
+    expect(actual[i].pubkey.toBase58()).toBe(expected[i].pubkey);
+    expect(actual[i].isSigner).toBe(expected[i].is_signer);
+    expect(actual[i].isWritable).toBe(expected[i].is_writable);
+  }
+}

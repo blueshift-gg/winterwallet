@@ -14,3 +14,7 @@ winterwallet-core = { workspace = true }
 solana-address = { workspace = true, features = ["curve25519"] }
 solana-instruction = { workspace = true }
 solana-system-interface = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
+solana-sha256-hasher = { workspace = true }

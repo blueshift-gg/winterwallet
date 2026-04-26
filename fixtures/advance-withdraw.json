@@ -1,0 +1,55 @@
+{
+  "name": "advance_withdraw_v1",
+  "wallet_id": "0101010101010101010101010101010101010101010101010101010101010101",
+  "current_root": "0202020202020202020202020202020202020202020202020202020202020202",
+  "new_root": "0404040404040404040404040404040404040404040404040404040404040404",
+  "payer": "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN",
+  "wallet_pda": "3Z7fxnXnCgGTSVQutT7sR2QDPxEfQDHuvig73ceFahdg",
+  "wallet_bump": 253,
+  "receiver": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8",
+  "lamports": "500000",
+  "payload": "010209000220a1070000000000",
+  "passthrough_accounts": [
+    {
+      "pubkey": "22222222222222222222222222222222222222222222",
+      "is_signer": false,
+      "is_writable": false
+    },
+    {
+      "pubkey": "3Z7fxnXnCgGTSVQutT7sR2QDPxEfQDHuvig73ceFahdg",
+      "is_signer": false,
+      "is_writable": true
+    },
+    {
+      "pubkey": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8",
+      "is_signer": false,
+      "is_writable": true
+    }
+  ],
+  "advance_digest": "2bf2ba9c215f11978554e393a479ab79a17451b749ee73520b363c3e65ddf646",
+  "advance_instruction_data_len": 814,
+  "advance_instruction_data_sha256": "8e68c521d1cbda474d4d66eae30499f170457eedfb1c857383b6621e0a6eb025",
+  "advance_instruction_accounts": [
+    {
+      "pubkey": "3Z7fxnXnCgGTSVQutT7sR2QDPxEfQDHuvig73ceFahdg",
+      "is_signer": false,
+      "is_writable": true
+    },
+    {
+      "pubkey": "22222222222222222222222222222222222222222222",
+      "is_signer": false,
+      "is_writable": false
+    },
+    {
+      "pubkey": "3Z7fxnXnCgGTSVQutT7sR2QDPxEfQDHuvig73ceFahdg",
+      "is_signer": false,
+      "is_writable": true
+    },
+    {
+      "pubkey": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8",
+      "is_signer": false,
+      "is_writable": true
+    }
+  ],
+  "legacy_transaction_size": 1104
+}

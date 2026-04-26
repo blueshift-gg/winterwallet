@@ -1387,8 +1387,10 @@ dependencies = [
 name = "winterwallet-client"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "solana-address",
  "solana-instruction",
+ "solana-sha256-hasher",
  "solana-system-interface",
  "winterwallet-common",
  "winterwallet-core",
