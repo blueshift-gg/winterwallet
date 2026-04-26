@@ -1,3 +1,5 @@
+use core::mem::MaybeUninit;
+
 use crate::WinternitzError;
 
 /// 32-byte commitment to a [`WinternitzPubkey`] — the domain-separated Merkle
@@ -82,8 +84,11 @@ impl<const N: usize> WinternitzPubkey<N> {
 
     /// Compute the Merkle root over all `N + 2` scalars. Leaves are
     /// `SHA256(0x00 || scalar)`; internal nodes are `SHA256(0x01 || L || R)`
-    /// (domain-separated). Odd-length levels duplicate the trailing node.
-    #[inline(never)]
+    /// (domain-separated). The tree shape is "rightmost-duplication on odd
+    /// levels" — equivalently, an online stack-collapse where leaves are
+    /// streamed left-to-right, adjacent same-level entries combine on push,
+    /// and any orphan top-of-stack at drain is lifted to its left
+    /// neighbour's level by repeated self-duplication.
     pub fn merklize(&self) -> WinternitzRoot {
         const { crate::assert_n::<N>() };
         // Domain-separate leaves and internal nodes to prevent second-preimage
@@ -92,35 +97,52 @@ impl<const N: usize> WinternitzPubkey<N> {
         const LEAF_TAG: &[u8] = &[0x00];
         const NODE_TAG: &[u8] = &[0x01];
 
-        // N <= 32 (asserted), so N + 2 <= 34. Stack buffer collapses in place.
-        let mut nodes: [[u8; 32]; 34] = [[0u8; 32]; 34];
-        for (slot, leaf) in nodes
-            .iter_mut()
-            .zip(self.scalars.iter().chain(self.checksum.iter()))
-        {
-            *slot = solana_sha256_hasher::hashv(&[LEAF_TAG, leaf]).to_bytes();
-        }
-        let mut len = N + 2;
+        // For N in [16, 32] (even), N + 2 is in [18, 34]. Maximum stack
+        // depth across any prefix is `popcount` of that prefix length —
+        // worst case is i = 31 with popcount 5, hit only when N + 2 >= 32.
+        const MAX_DEPTH: usize = 5;
+        let mut stack: [MaybeUninit<[u8; 32]>; MAX_DEPTH] =
+            [const { MaybeUninit::uninit() }; MAX_DEPTH];
+        let mut levels = [0u8; MAX_DEPTH];
+        let mut len: usize = 0;
 
-        while len > 1 {
-            let mut write = 0;
-            let mut read = 0;
-            while read < len {
-                let left = nodes[read];
-                let right = if read + 1 < len {
-                    nodes[read + 1]
-                } else {
-                    left
-                };
-                nodes[write] =
-                    solana_sha256_hasher::hashv(&[NODE_TAG, &left[..], &right[..]]).to_bytes();
-                write += 1;
-                read += 2;
+        for leaf in self.scalars.iter().chain(self.checksum.iter()) {
+            let mut h: [u8; 32] = solana_sha256_hasher::hashv(&[LEAF_TAG, leaf]).to_bytes();
+            let mut level: u8 = 0;
+            while len > 0 && levels[len - 1] == level {
+                // SAFETY: stack[len - 1] was initialised in a prior push.
+                let top = unsafe { stack[len - 1].assume_init_read() };
+                h = solana_sha256_hasher::hashv(&[NODE_TAG, &top, &h]).to_bytes();
+                level += 1;
+                len -= 1;
             }
-            len = write;
+            stack[len].write(h);
+            levels[len] = level;
+            len += 1;
         }
 
-        WinternitzRoot(nodes[0])
+        // Drain: collapse the stack, lifting orphan right-edge subtrees by
+        // self-duplication so the resulting tree matches the level-by-level
+        // shape with rightmost-duplication.
+        while len > 1 {
+            // SAFETY: both top entries are initialised.
+            let mut top = unsafe { stack[len - 1].assume_init_read() };
+            let mut top_level = levels[len - 1];
+            let next_level = levels[len - 2];
+            while top_level < next_level {
+                top = solana_sha256_hasher::hashv(&[NODE_TAG, &top, &top]).to_bytes();
+                top_level += 1;
+            }
+            let next = unsafe { stack[len - 2].assume_init_read() };
+            let combined = solana_sha256_hasher::hashv(&[NODE_TAG, &next, &top]).to_bytes();
+            stack[len - 2].write(combined);
+            levels[len - 2] = top_level + 1;
+            len -= 1;
+        }
+
+        // SAFETY: at least N + 2 >= 18 leaves were processed, so len == 1.
+        let root = unsafe { stack[0].assume_init_read() };
+        WinternitzRoot(root)
     }
 }
 

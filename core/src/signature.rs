@@ -1,3 +1,5 @@
+use core::mem::MaybeUninit;
+
 use crate::{WinternitzError, WinternitzPubkey, WinternitzRoot};
 
 /// Winternitz one-time signature: `N` message scalars and 2 checksum scalars,
@@ -32,7 +34,7 @@ impl<const N: usize> WinternitzSignature<N> {
     }
 
     /// Verify this signature against a message and a stored root. Returns
-    /// `true` iff the signature is valid. The message is supplied as a slice
+    /// `true` if the signature is valid. The message is supplied as a slice
     /// of byte slices (matching `solana_sha256_hasher::hashv`), so callers
     /// can mix domain-separation tags or context bytes with the payload
     /// without an intermediate allocation.
@@ -64,20 +66,26 @@ impl<const N: usize> WinternitzSignature<N> {
 
     /// Recover the [`WinternitzPubkey`] from a pre-hashed message digest. See
     /// [`Self::hash`] for the expected digest construction.
-    #[inline(never)]
+    #[inline(always)]
     pub fn recover_pubkey_prehashed(&self, hash: &[u8; N]) -> WinternitzPubkey<N> {
         const { crate::assert_n::<N>() };
-        let mut pk_scalars = [[0u8; 32]; N];
+        let mut pk_scalars: [MaybeUninit<[u8; 32]>; N] =
+            [const { MaybeUninit::uninit() }; N];
         let mut checksum_sum: u16 = 0;
         for i in 0..N {
             let b = hash[i];
-            pk_scalars[i] = crate::chain(&self.scalars[i], 255 - b);
+            pk_scalars[i].write(crate::chain(&self.scalars[i], 255 - b));
             checksum_sum += 255u16 - b as u16;
         }
         let pk_checksum = [
             crate::chain(&self.checksum[0], 255 - (checksum_sum >> 8) as u8),
             crate::chain(&self.checksum[1], 255 - checksum_sum as u8),
         ];
+        // SAFETY: the loop above wrote every slot of `pk_scalars`, and
+        // `[MaybeUninit<T>; N]` has the same layout as `[T; N]`.
+        let pk_scalars: [[u8; 32]; N] = unsafe {
+            core::ptr::read(pk_scalars.as_ptr() as *const [[u8; 32]; N])
+        };
         WinternitzPubkey::new(pk_scalars, pk_checksum)
     }
 
