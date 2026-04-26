@@ -12,6 +12,9 @@ impl WinterWallet {
     pub const LEN: usize = core::mem::size_of::<Self>();
 }
 
+// Compile-time check that our layout matches the shared constant.
+const _: () = assert!(WinterWallet::LEN == winterwallet_common::WALLET_ACCOUNT_LEN);
+
 /// Reborrow a `WinterWallet` view over an `AccountView`'s data.
 ///
 /// **Invariant:** the runtime borrow flag is released as soon as the

@@ -1,4 +1,10 @@
-use pinocchio::{AccountView, ProgramResult, error::ProgramError};
+use pinocchio::{
+    AccountView, ProgramResult,
+    error::ProgramError,
+    sysvars::{Sysvar, rent::Rent},
+};
+
+use crate::WinterWallet;
 
 pub struct Withdraw<'a> {
     wallet: &'a mut AccountView,
@@ -50,10 +56,15 @@ impl<'a> Withdraw<'a> {
 
     #[inline(always)]
     pub fn execute(&mut self) -> ProgramResult {
-        // Remove lamports from wallet account
-        self.wallet
-            .set_lamports(self.wallet.lamports().saturating_sub(self.lamports));
-        // Add lamports to receiver account
+        let balance = self.wallet.lamports();
+
+        // Reject withdrawals that would bring the account below rent-exempt.
+        let rent_exempt = Rent::get()?.try_minimum_balance(WinterWallet::LEN)?;
+        if balance.saturating_sub(self.lamports) < rent_exempt {
+            return Err(ProgramError::InsufficientFunds);
+        }
+
+        self.wallet.set_lamports(balance - self.lamports);
         self.receiver
             .set_lamports(self.receiver.lamports().saturating_add(self.lamports));
         Ok(())
