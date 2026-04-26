@@ -1,0 +1,16 @@
+[package]
+name = "winterwallet-client"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[dependencies]
+winterwallet-common = { workspace = true }
+winterwallet-core = { workspace = true }
+solana-address = { workspace = true, features = ["curve25519"] }
+solana-instruction = { workspace = true }
+solana-system-interface = { workspace = true }
