@@ -117,21 +117,26 @@ impl<'a> Advance<'a> {
 
         // 4 leading parts (tag, id, current root, new root) + N account
         // addresses + 1 trailing payload.
-        let mut parts: [&[u8]; 5 + MAX_PASSTHROUGH_ACCOUNTS] =
-            [&[][..]; 5 + MAX_PASSTHROUGH_ACCOUNTS];
-        parts[0] = WINTERWALLET_ADVANCE;
-        parts[1] = id;
-        parts[2] = current_root.as_bytes();
-        parts[3] = self.root;
+        let mut parts: [MaybeUninit<&[u8]>; 5 + MAX_PASSTHROUGH_ACCOUNTS] =
+            [const { MaybeUninit::uninit() }; 5 + MAX_PASSTHROUGH_ACCOUNTS];
+        parts[0].write(WINTERWALLET_ADVANCE);
+        parts[1].write(id);
+        parts[2].write(current_root.as_bytes());
+        parts[3].write(self.root);
         let mut idx = 4;
         for acc in self.accounts.iter() {
-            parts[idx] = acc.address().as_array();
+            parts[idx].write(acc.address().as_array());
             idx += 1;
         }
-        parts[idx] = self.payload;
+        parts[idx].write(self.payload);
         idx += 1;
 
-        if !self.signature.verify(&parts[..idx], current_root) {
+        // SAFETY: parts[..idx] were each written exactly once above, and
+        // `MaybeUninit<&[u8]>` shares layout with `&[u8]`.
+        let parts_init: &[&[u8]] =
+            unsafe { core::slice::from_raw_parts(parts.as_ptr() as *const &[u8], idx) };
+
+        if !self.signature.verify(parts_init, current_root) {
             return Err(ProgramError::MissingRequiredSignature);
         }
         Ok(())
@@ -140,7 +145,6 @@ impl<'a> Advance<'a> {
 
 /// Decode the next compiled instruction from `payload`, consume its accounts
 /// from `remaining` via `cursor`, and CPI-invoke it under `signers`.
-#[inline(never)]
 fn invoke_next(
     payload: &mut &[u8],
     remaining: &[AccountView],
