@@ -11,4 +11,18 @@ name = "winterwallet"
 path = "src/main.rs"
 
 [dependencies]
+winterwallet-client = { workspace = true }
+winterwallet-common = { workspace = true }
 winterwallet-core = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-address = { workspace = true, features = ["curve25519"] }
+solana-instruction = { workspace = true }
+ureq = { version = "3", features = ["json"] }
+base64 = "0.22"
+bs58 = "0.5"
+ed25519-dalek = "2.1"
+rpassword = "7"
+zeroize = { workspace = true }
