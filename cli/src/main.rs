@@ -181,3 +181,73 @@ fn required_keypair(cli: &Cli) -> Result<&str, String> {
         .as_deref()
         .ok_or_else(|| "--keypair is required for this command".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_global_transaction_knobs() {
+        let cli = Cli::try_parse_from([
+            "winterwallet",
+            "--rpc-url",
+            "https://example.invalid",
+            "--keypair",
+            "/tmp/payer.json",
+            "--commitment",
+            "finalized",
+            "--priority-fee",
+            "42",
+            "withdraw",
+            "--to",
+            "11111111111111111111111111111111",
+            "--amount",
+            "5",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.rpc_url, "https://example.invalid");
+        assert_eq!(cli.keypair.as_deref(), Some("/tmp/payer.json"));
+        assert_eq!(cli.commitment, "finalized");
+        assert_eq!(cli.priority_fee, 42);
+        match cli.command {
+            Command::Withdraw { to, amount } => {
+                assert_eq!(to, "11111111111111111111111111111111");
+                assert_eq!(amount, 5);
+            }
+            _ => panic!("expected withdraw command"),
+        }
+    }
+
+    #[test]
+    fn parses_state_repair_command() {
+        let cli =
+            Cli::try_parse_from(["winterwallet", "state", "repair", "--max-depth", "123"]).unwrap();
+
+        match cli.command {
+            Command::State {
+                command: StateCommand::Repair { max_depth },
+            } => assert_eq!(max_depth, 123),
+            _ => panic!("expected state repair command"),
+        }
+    }
+
+    #[test]
+    fn transaction_commands_require_keypair() {
+        let cli = Cli::try_parse_from([
+            "winterwallet",
+            "withdraw",
+            "--to",
+            "11111111111111111111111111111111",
+            "--amount",
+            "5",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            required_keypair(&cli).unwrap_err(),
+            "--keypair is required for this command"
+        );
+    }
+}

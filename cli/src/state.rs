@@ -1,7 +1,9 @@
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use winterwallet_client::{AdvancePersistence, SignedAdvance};
 
 /// Persisted local wallet state. Tracks the current key position so the
@@ -30,12 +32,37 @@ fn dirs_or_default() -> PathBuf {
 }
 
 pub fn state_path(wallet_id_hex: &str) -> PathBuf {
-    state_dir().join(format!("{wallet_id_hex}.json"))
+    state_path_in(&state_dir(), wallet_id_hex)
+}
+
+fn state_path_in(dir: &Path, wallet_id_hex: &str) -> PathBuf {
+    dir.join(format!("{wallet_id_hex}.json"))
+}
+
+fn lock_path_in(dir: &Path, wallet_id_hex: &str) -> PathBuf {
+    dir.join(format!("{wallet_id_hex}.lock"))
+}
+
+fn ensure_state_dir(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        fs::create_dir_all(dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("failed to set dir permissions: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Load wallet state from disk. Returns `None` if the file does not exist.
 pub fn load(wallet_id_hex: &str) -> Result<Option<WalletState>, String> {
-    let path = state_path(wallet_id_hex);
+    load_in_dir(&state_dir(), wallet_id_hex)
+}
+
+fn load_in_dir(dir: &Path, wallet_id_hex: &str) -> Result<Option<WalletState>, String> {
+    let path = state_path_in(dir, wallet_id_hex);
     if !path.exists() {
         return Ok(None);
     }
@@ -51,21 +78,16 @@ pub fn load(wallet_id_hex: &str) -> Result<Option<WalletState>, String> {
 /// temp-file + fsync + rename so an interrupted process does not corrupt the
 /// current position file.
 pub fn save(state: &WalletState) -> Result<(), String> {
-    let dir = state_dir();
-    if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
-                .map_err(|e| format!("failed to set dir permissions: {e}"))?;
-        }
-    }
+    save_in_dir(&state_dir(), state)
+}
+
+fn save_in_dir(dir: &Path, state: &WalletState) -> Result<(), String> {
+    ensure_state_dir(dir)?;
 
     let json = serde_json::to_string_pretty(state)
         .map_err(|e| format!("failed to serialize state: {e}"))?;
 
-    let path = state_path(&state.wallet_id);
+    let path = state_path_in(dir, &state.wallet_id);
     let tmp_path = path.with_file_name(format!(
         ".{}.tmp.{}",
         path.file_name()
@@ -110,7 +132,7 @@ pub fn save(state: &WalletState) -> Result<(), String> {
 
         #[cfg(unix)]
         {
-            let dir_file = fs::File::open(&dir)
+            let dir_file = fs::File::open(dir)
                 .map_err(|e| format!("failed to open state dir {}: {e}", dir.display()))?;
             dir_file
                 .sync_all()
@@ -126,6 +148,47 @@ pub fn save(state: &WalletState) -> Result<(), String> {
     write_result?;
 
     Ok(())
+}
+
+/// Held exclusive lock for one wallet's local state.
+pub struct WalletLock {
+    file: File,
+}
+
+impl WalletLock {
+    fn new(file: File) -> Self {
+        Self { file }
+    }
+}
+
+impl Drop for WalletLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+/// Acquire an exclusive non-blocking lock for a wallet's local state.
+pub fn acquire_lock(wallet_id_hex: &str) -> Result<WalletLock, String> {
+    acquire_lock_in_dir(&state_dir(), wallet_id_hex)
+}
+
+fn acquire_lock_in_dir(dir: &Path, wallet_id_hex: &str) -> Result<WalletLock, String> {
+    ensure_state_dir(dir)?;
+    let path = lock_path_in(dir, wallet_id_hex);
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("failed to open state lock {}: {e}", path.display()))?;
+    file.try_lock_exclusive().map_err(|e| {
+        format!(
+            "wallet state is locked by another process ({}): {e}",
+            path.display()
+        )
+    })?;
+    Ok(WalletLock::new(file))
 }
 
 /// Hex-encode a 32-byte wallet ID.
@@ -147,5 +210,51 @@ impl AdvancePersistence for StateStore {
             parent: next.parent(),
             child: next.child(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_load_roundtrip_uses_atomic_path() {
+        let dir = temp_state_dir("roundtrip");
+        let state = WalletState {
+            wallet_id: "aa".repeat(32),
+            pda: "pda".to_string(),
+            parent: 7,
+            child: 9,
+        };
+
+        save_in_dir(&dir, &state).unwrap();
+        let loaded = load_in_dir(&dir, &state.wallet_id).unwrap().unwrap();
+
+        assert_eq!(loaded.wallet_id, state.wallet_id);
+        assert_eq!(loaded.pda, state.pda);
+        assert_eq!(loaded.parent, 7);
+        assert_eq!(loaded.child, 9);
+        assert!(state_path_in(&dir, &state.wallet_id).exists());
+    }
+
+    #[test]
+    fn wallet_lock_file_can_be_acquired() {
+        let dir = temp_state_dir("lock");
+        let wallet_id = "bb".repeat(32);
+        let _lock = acquire_lock_in_dir(&dir, &wallet_id).unwrap();
+        assert!(lock_path_in(&dir, &wallet_id).exists());
+    }
+
+    fn temp_state_dir(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "winterwallet-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        dir
     }
 }

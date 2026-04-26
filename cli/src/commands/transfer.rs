@@ -46,9 +46,14 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
         .map_err(|e| format!("failed to derive wallet ID: {e}"))?;
     let wallet_id_hex = state::hex_encode(&wallet_id);
     let (pda, _bump) = find_wallet_address(&wallet_id);
+    let _wallet_lock = state::acquire_lock(&wallet_id_hex)?;
 
     let local_state = state::load(&wallet_id_hex)?
         .ok_or("no local state found — run `winterwallet init` first")?;
+    let position = SigningPosition::new(0, local_state.parent, local_state.child);
+    let next_position = position
+        .next()
+        .map_err(|e| format!("failed to derive next position: {e}"))?;
 
     let account = helpers::get_account(rpc_url, commitment, &pda)?;
     let on_chain = WinterWalletAccount::from_bytes(&account.data)
@@ -63,9 +68,9 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
 
     let new_root = WinternitzKeypair::from_mnemonic_at(
         &mnemonic,
-        0,
-        local_state.parent,
-        local_state.child + 1,
+        next_position.wallet(),
+        next_position.parent(),
+        next_position.child(),
     )
     .map_err(|e| format!("failed to derive next position: {e}"))?
     .derive::<WINTERNITZ_SCALARS>()
@@ -83,10 +88,7 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
     let source_ata = derive_ata(&pda, &mint_addr, &token_program);
     let dest_ata = derive_ata(&dest_owner, &mint_addr, &token_program);
 
-    let wallet = WinterWallet::from_account(
-        &on_chain,
-        SigningPosition::new(0, local_state.parent, local_state.child),
-    );
+    let wallet = WinterWallet::from_account(&on_chain, position);
     let unsigned = wallet
         .transfer_plan(
             &source_ata,
@@ -117,8 +119,8 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
                     "destination_ata": dest_ata.to_string(),
                     "token_program": token_program.to_string(),
                     "next_position": {
-                        "parent": local_state.parent,
-                        "child": local_state.child + 1,
+                        "parent": next_position.parent(),
+                        "child": next_position.child(),
                     },
                     "estimated_transaction_size": preview.estimated_size,
                     "compute_unit_limit": preview.compute_unit_limit,
@@ -133,8 +135,8 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
             println!("  Dest:      {dest_ata}");
             println!(
                 "  Position:  ({}, {})",
-                local_state.parent,
-                local_state.child + 1
+                next_position.parent(),
+                next_position.child()
             );
             println!("  Tx size:   {} bytes", preview.estimated_size);
             println!("  CU limit:  {}", preview.compute_unit_limit);

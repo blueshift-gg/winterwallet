@@ -1,4 +1,4 @@
-use winterwallet_client::{find_wallet_address, wallet_id_from_mnemonic};
+use winterwallet_client::{SigningPosition, find_wallet_address, wallet_id_from_mnemonic};
 use winterwallet_common::{SIGNATURE_LEN, WINTERNITZ_SCALARS};
 use winterwallet_core::WinternitzKeypair;
 
@@ -30,6 +30,7 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
     let wallet_id = wallet_id_from_mnemonic(&mnemonic)
         .map_err(|e| format!("failed to derive wallet ID: {e}"))?;
     let wallet_id_hex = state::hex_encode(&wallet_id);
+    let _wallet_lock = state::acquire_lock(&wallet_id_hex)?;
 
     if let Some(existing) = state::load(&wallet_id_hex)? {
         return Err(format!(
@@ -43,12 +44,20 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
     // Position (0,0,0) signs the Initialize preimage.
     let mut keypair = WinternitzKeypair::from_mnemonic(&mnemonic, 0)
         .map_err(|e| format!("invalid mnemonic: {e}"))?;
+    let next_position = SigningPosition::new(0, 0, 0)
+        .next()
+        .map_err(|e| format!("failed to derive next position: {e}"))?;
 
-    let next_root = WinternitzKeypair::from_mnemonic_at(&mnemonic, 0, 0, 1)
-        .map_err(|e| format!("failed to derive next position: {e}"))?
-        .derive::<WINTERNITZ_SCALARS>()
-        .to_pubkey()
-        .merklize();
+    let next_root = WinternitzKeypair::from_mnemonic_at(
+        &mnemonic,
+        next_position.wallet(),
+        next_position.parent(),
+        next_position.child(),
+    )
+    .map_err(|e| format!("failed to derive next position: {e}"))?
+    .derive::<WINTERNITZ_SCALARS>()
+    .to_pubkey()
+    .merklize();
 
     let zero_sig = [0u8; SIGNATURE_LEN];
     let preview_ix = winterwallet_client::initialize(
@@ -68,7 +77,7 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
                     "action": "init",
                     "wallet_id": wallet_id_hex,
                     "pda": pda.to_string(),
-                    "next_position": { "parent": 0, "child": 1 },
+                    "next_position": { "parent": next_position.parent(), "child": next_position.child() },
                     "estimated_transaction_size": preview.estimated_size,
                     "compute_unit_limit": preview.compute_unit_limit,
                     "priority_fee_micro_lamports": preview.priority_fee_micro_lamports,
@@ -78,7 +87,11 @@ pub fn run(args: RunArgs<'_>) -> Result<(), String> {
         } else {
             println!("Dry run: initialize wallet");
             println!("  PDA:       {pda}");
-            println!("  Position:  (0, 1)");
+            println!(
+                "  Position:  ({}, {})",
+                next_position.parent(),
+                next_position.child()
+            );
             println!("  Tx size:   {} bytes", preview.estimated_size);
             println!("  CU limit:  {}", preview.compute_unit_limit);
             println!(

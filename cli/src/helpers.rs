@@ -198,7 +198,8 @@ fn simulate_transaction(rpc_url: &str, commitment: &str, wire_tx: &[u8]) -> Resu
         json!([b64, {"encoding": "base64", "sigVerify": false, "commitment": commitment}]),
     )?;
 
-    if let Some(err) = result["value"]["err"].as_object() {
+    let err = &result["value"]["err"];
+    if !err.is_null() {
         let logs = result["value"]["logs"]
             .as_array()
             .map(|a| {
@@ -208,7 +209,7 @@ fn simulate_transaction(rpc_url: &str, commitment: &str, wire_tx: &[u8]) -> Resu
                     .join("\n  ")
             })
             .unwrap_or_default();
-        return Err(format!("simulation failed: {err:?}\n  {logs}"));
+        return Err(format!("simulation failed: {err}\n  {logs}"));
     }
 
     Ok(())

@@ -17,6 +17,7 @@ pub fn run(
         .map_err(|e| format!("failed to derive wallet ID: {e}"))?;
     let wallet_id_hex = state::hex_encode(&wallet_id);
     let (pda, _bump) = find_wallet_address(&wallet_id);
+    let _wallet_lock = state::acquire_lock(&wallet_id_hex)?;
 
     let account = helpers::get_account(rpc_url, commitment, &pda)?;
     let on_chain = WinterWalletAccount::from_bytes(&account.data)

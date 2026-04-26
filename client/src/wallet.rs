@@ -46,15 +46,24 @@ impl SigningPosition {
         self.child
     }
 
+    /// Return the next signing position.
+    pub fn next(&self) -> Result<Self, Error> {
+        match self.child.checked_add(1) {
+            Some(child) => Ok(Self::new(self.wallet, self.parent, child)),
+            None => Ok(Self::new(
+                self.wallet,
+                self.parent.checked_add(1).ok_or(Error::PositionOverflow)?,
+                0,
+            )),
+        }
+    }
+
     fn tuple(&self) -> (u32, u32, u32) {
         (self.wallet, self.parent, self.child)
     }
 
     fn ensure_can_advance(&self) -> Result<(), Error> {
-        if self.parent == u32::MAX && self.child == u32::MAX {
-            return Err(Error::PositionOverflow);
-        }
-        Ok(())
+        self.next().map(|_| ())
     }
 }
 

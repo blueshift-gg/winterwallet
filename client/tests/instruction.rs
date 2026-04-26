@@ -227,3 +227,16 @@ fn wallet_state_machine_requires_persistence_before_send() {
     let mut sender = Sender;
     assert_eq!(persisted.send(&mut sender).unwrap(), "submitted");
 }
+
+#[test]
+fn signing_position_next_handles_child_rollover_and_overflow() {
+    let rolled = SigningPosition::new(0, 7, u32::MAX).next().unwrap();
+    assert_eq!(rolled.wallet(), 0);
+    assert_eq!(rolled.parent(), 8);
+    assert_eq!(rolled.child(), 0);
+
+    assert!(matches!(
+        SigningPosition::new(0, u32::MAX, u32::MAX).next(),
+        Err(Error::PositionOverflow)
+    ));
+}

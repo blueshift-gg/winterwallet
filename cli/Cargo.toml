@@ -26,3 +26,4 @@ bs58 = "0.5"
 ed25519-dalek = "2.1"
 rpassword = "7"
 zeroize = { workspace = true }
+fs2 = "0.4"
