@@ -1,14 +1,19 @@
-use pinocchio::{AccountView, Address, ProgramResult, cpi::{Seed, Signer}, error::ProgramError, sysvars::{Sysvar, rent::Rent}};
+use pinocchio::{
+    AccountView, Address, ProgramResult,
+    cpi::{Seed, Signer},
+    error::ProgramError,
+    sysvars::{Sysvar, rent::Rent},
+};
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 use winterwallet_core::{WinternitzRoot, WinternitzSignature};
 
-use crate::{WINTERWALLET_INITIALIZE, WINTERNITZ_SCALARS, WinterWallet};
+use crate::{WINTERNITZ_SCALARS, WINTERWALLET_INITIALIZE, WinterWallet};
 
 pub struct Initialize<'a> {
     payer: &'a mut AccountView,
     wallet: &'a mut AccountView,
     signature: &'a WinternitzSignature<WINTERNITZ_SCALARS>,
-    root: &'a [u8;32], // Next wallet address
+    root: &'a [u8; 32], // Next wallet address
 }
 
 impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Initialize<'a> {
@@ -33,16 +38,24 @@ impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Initialize<'a> {
             return Err(ProgramError::InvalidAccountOwner);
         }
 
-        let (sig_bytes, root_bytes) = inputs.1.split_first_chunk::<{ 32 * 24 }>()
+        let (sig_bytes, root_bytes) = inputs
+            .1
+            .split_first_chunk::<{ 32 * 24 }>()
             .ok_or(ProgramError::InvalidInstructionData)?;
-        let signature: &WinternitzSignature<WINTERNITZ_SCALARS> = sig_bytes.as_slice().try_into().map_err(|_| ProgramError::InvalidInstructionData)?;
-        let root: &[u8; 32] = root_bytes.try_into().map_err(|_| ProgramError::InvalidInstructionData)?;
+        let signature: &WinternitzSignature<WINTERNITZ_SCALARS> =
+            sig_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| ProgramError::InvalidInstructionData)?;
+        let root: &[u8; 32] = root_bytes
+            .try_into()
+            .map_err(|_| ProgramError::InvalidInstructionData)?;
 
         Ok(Self {
             payer,
             wallet,
             signature,
-            root
+            root,
         })
     }
 }
@@ -59,7 +72,9 @@ impl<'a> Initialize<'a> {
         let id = self.recover_initialize_id();
 
         // Verify wallet address and calculate bump
-        let (wallet_address, bump) = Address::derive_program_address(&[b"winterwallet", id.as_bytes()], &crate::ID).ok_or(ProgramError::InvalidSeeds)?;
+        let (wallet_address, bump) =
+            Address::derive_program_address(&[b"winterwallet", id.as_bytes()], &crate::ID)
+                .ok_or(ProgramError::InvalidSeeds)?;
 
         if wallet_address.ne(self.wallet.address()) {
             return Err(ProgramError::InvalidSeeds);
@@ -69,9 +84,9 @@ impl<'a> Initialize<'a> {
         let binding = [bump];
 
         let seeds = [
-            Seed::from(b"winterwallet"), 
-            Seed::from(id.as_bytes()), 
-            Seed::from(&binding)
+            Seed::from(b"winterwallet"),
+            Seed::from(id.as_bytes()),
+            Seed::from(&binding),
         ];
 
         let signers = [Signer::from(&seeds)];
@@ -99,28 +114,32 @@ impl<'a> Initialize<'a> {
                 to: self.wallet,
                 lamports: rent_exempt_lamports,
                 space: WinterWallet::LEN as u64,
-                owner: &crate::ID
-            }.invoke_signed(&signers)
+                owner: &crate::ID,
+            }
+            .invoke_signed(signers)
         } else {
             // Transfer remaining rent exempt lamports if required
             if lamports < rent_exempt_lamports {
                 Transfer {
                     from: self.payer,
                     to: self.wallet,
-                    lamports: rent_exempt_lamports.saturating_sub(lamports)
-                }.invoke_signed(signers)?;
+                    lamports: rent_exempt_lamports.saturating_sub(lamports),
+                }
+                .invoke_signed(signers)?;
             }
             // Allocate space for WinterWallet account
             Allocate {
                 account: self.wallet,
                 space: WinterWallet::LEN as u64,
-            }.invoke_signed(signers)?;
+            }
+            .invoke_signed(signers)?;
 
             // Assign account to WinterWallet program
             Assign {
                 account: self.wallet,
-                owner: &crate::ID
-            }.invoke_signed(signers)
+                owner: &crate::ID,
+            }
+            .invoke_signed(signers)
         }
     }
 }

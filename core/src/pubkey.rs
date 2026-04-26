@@ -83,6 +83,7 @@ impl<const N: usize> WinternitzPubkey<N> {
     /// Compute the Merkle root over all `N + 2` scalars. Leaves are
     /// `SHA256(0x00 || scalar)`; internal nodes are `SHA256(0x01 || L || R)`
     /// (domain-separated). Odd-length levels duplicate the trailing node.
+    #[inline(never)]
     pub fn merklize(&self) -> WinternitzRoot {
         const { crate::assert_n::<N>() };
         // Domain-separate leaves and internal nodes to prevent second-preimage

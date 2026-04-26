@@ -3,6 +3,9 @@ name = "winterwallet"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "winterwallet"
 path = "src/main.rs"

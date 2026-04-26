@@ -6,6 +6,12 @@ members = ["core", "cli", "program"]
 version = "0.1.0"
 edition = "2024"
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(target_os, values("solana"))',
+    'cfg(target_arch, values("bpf"))',
+] }
+
 [workspace.dependencies]
 winterwallet-core = { path = "core" }
 solana-sha256-hasher = { version = "3.1.0", default-features = false }

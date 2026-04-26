@@ -3,7 +3,7 @@ use pinocchio::{AccountView, ProgramResult, error::ProgramError};
 pub struct Withdraw<'a> {
     wallet: &'a mut AccountView,
     receiver: &'a mut AccountView,
-    lamports: u64
+    lamports: u64,
 }
 
 impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Withdraw<'a> {
@@ -24,15 +24,20 @@ impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Withdraw<'a> {
         // program invoking `withdraw` as a top-level instruction, as it isn't
         // dangerous, however this is a simple way to stop them from doing so.
         if wallet.data_len() == 0 {
-            return Err(ProgramError::InvalidAccountData)
+            return Err(ProgramError::InvalidAccountData);
         }
 
-        let lamports: u64 = u64::from_le_bytes(inputs.1.try_into().map_err(|_| ProgramError::InvalidInstructionData)?);
+        let lamports: u64 = u64::from_le_bytes(
+            inputs
+                .1
+                .try_into()
+                .map_err(|_| ProgramError::InvalidInstructionData)?,
+        );
 
         Ok(Self {
             wallet,
             receiver,
-            lamports
+            lamports,
         })
     }
 }
@@ -46,9 +51,11 @@ impl<'a> Withdraw<'a> {
     #[inline(always)]
     pub fn execute(&mut self) -> ProgramResult {
         // Remove lamports from wallet account
-        self.wallet.set_lamports(self.wallet.lamports().saturating_sub(self.lamports));
+        self.wallet
+            .set_lamports(self.wallet.lamports().saturating_sub(self.lamports));
         // Add lamports to receiver account
-        self.receiver.set_lamports(self.receiver.lamports().saturating_add(self.lamports));
+        self.receiver
+            .set_lamports(self.receiver.lamports().saturating_add(self.lamports));
         Ok(())
     }
 }

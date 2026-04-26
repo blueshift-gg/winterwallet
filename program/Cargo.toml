@@ -3,6 +3,9 @@ name = "winterwallet-program"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["cdylib"]
 

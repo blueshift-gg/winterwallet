@@ -3,6 +3,9 @@ name = "winterwallet-core"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 
 [dependencies]

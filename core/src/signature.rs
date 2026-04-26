@@ -13,7 +13,8 @@ pub struct WinternitzSignature<const N: usize> {
 }
 
 impl<const N: usize> WinternitzSignature<N> {
-    pub(crate) fn new(scalars: [[u8; 32]; N], checksum: [[u8; 32]; 2]) -> Self {
+    /// Create a signature from `N * [u8;32]` scalars + 2 checksum scalars.
+    pub fn new(scalars: [[u8; 32]; N], checksum: [[u8; 32]; 2]) -> Self {
         const { crate::assert_n::<N>() };
         Self { scalars, checksum }
     }
@@ -63,7 +64,7 @@ impl<const N: usize> WinternitzSignature<N> {
 
     /// Recover the [`WinternitzPubkey`] from a pre-hashed message digest. See
     /// [`Self::hash`] for the expected digest construction.
-    #[inline(always)]
+    #[inline(never)]
     pub fn recover_pubkey_prehashed(&self, hash: &[u8; N]) -> WinternitzPubkey<N> {
         const { crate::assert_n::<N>() };
         let mut pk_scalars = [[0u8; 32]; N];

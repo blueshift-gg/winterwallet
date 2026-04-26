@@ -34,10 +34,11 @@ impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Advance<'a> {
             .1
             .split_first_chunk::<{ 32 * (WINTERNITZ_SCALARS + 2) }>()
             .ok_or(ProgramError::InvalidInstructionData)?;
-        let signature: &WinternitzSignature<WINTERNITZ_SCALARS> = sig_bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| ProgramError::InvalidInstructionData)?;
+        let signature: &WinternitzSignature<WINTERNITZ_SCALARS> =
+            sig_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| ProgramError::InvalidInstructionData)?;
         let (root, payload) = rest
             .split_first_chunk::<32>()
             .ok_or(ProgramError::InvalidInstructionData)?;
@@ -54,10 +55,7 @@ impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Advance<'a> {
 
 impl<'a> Advance<'a> {
     #[inline(always)]
-    pub fn process(
-        accounts: &'a mut [AccountView],
-        instruction_data: &'a [u8],
-    ) -> ProgramResult {
+    pub fn process(accounts: &'a mut [AccountView], instruction_data: &'a [u8]) -> ProgramResult {
         Self::try_from((accounts, instruction_data))?.execute()
     }
 
@@ -77,7 +75,6 @@ impl<'a> Advance<'a> {
         let wallet_address = *self.wallet.address().as_array();
 
         self.verify_signature(&id, &current_root)?;
-
 
         let seeds = [
             Seed::from(b"winterwallet"),
@@ -112,12 +109,8 @@ impl<'a> Advance<'a> {
     /// Preimage parts (concatenated under `solana_sha256_hasher::hashv`):
     /// `WINTERWALLET_ADVANCE`, wallet id, current root, new root, every
     /// trailing account address in order, then the raw replay payload.
-    #[inline(always)]
-    fn verify_signature(
-        &self,
-        id: &[u8; 32],
-        current_root: &WinternitzRoot,
-    ) -> ProgramResult {
+    #[inline(never)]
+    fn verify_signature(&self, id: &[u8; 32], current_root: &WinternitzRoot) -> ProgramResult {
         if self.accounts.len() > MAX_PASSTHROUGH_ACCOUNTS {
             return Err(ProgramError::InvalidArgument);
         }
@@ -147,7 +140,7 @@ impl<'a> Advance<'a> {
 
 /// Decode the next compiled instruction from `payload`, consume its accounts
 /// from `remaining` via `cursor`, and CPI-invoke it under `signers`.
-#[inline(always)]
+#[inline(never)]
 fn invoke_next(
     payload: &mut &[u8],
     remaining: &[AccountView],

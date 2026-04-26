@@ -76,16 +76,32 @@ fn verify_rejects_wrong_root() {
 fn deterministic_signature() {
     // W-OTS+ is a deterministic function of (privkey, message_hash).
     let kp = keypair();
-    let s1 = kp.derive::<N>().sign(&[b"abc".as_slice()]).as_bytes().to_vec();
-    let s2 = kp.derive::<N>().sign(&[b"abc".as_slice()]).as_bytes().to_vec();
+    let s1 = kp
+        .derive::<N>()
+        .sign(&[b"abc".as_slice()])
+        .as_bytes()
+        .to_vec();
+    let s2 = kp
+        .derive::<N>()
+        .sign(&[b"abc".as_slice()])
+        .as_bytes()
+        .to_vec();
     assert_eq!(s1, s2);
 }
 
 #[test]
 fn different_messages_produce_different_signatures() {
     let kp = keypair();
-    let s1 = kp.derive::<N>().sign(&[b"message one".as_slice()]).as_bytes().to_vec();
-    let s2 = kp.derive::<N>().sign(&[b"message two".as_slice()]).as_bytes().to_vec();
+    let s1 = kp
+        .derive::<N>()
+        .sign(&[b"message one".as_slice()])
+        .as_bytes()
+        .to_vec();
+    let s2 = kp
+        .derive::<N>()
+        .sign(&[b"message two".as_slice()])
+        .as_bytes()
+        .to_vec();
     assert_ne!(s1, s2);
 }
 

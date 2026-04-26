@@ -1,6 +1,9 @@
 #![cfg_attr(any(target_os = "solana", target_arch = "bpf"), no_std)]
 
-use pinocchio::{AccountView, Address, ProgramResult, error::ProgramError, no_allocator, nostd_panic_handler, program_entrypoint};
+use pinocchio::{
+    AccountView, Address, ProgramResult, error::ProgramError, no_allocator, nostd_panic_handler,
+    program_entrypoint,
+};
 use solana_address::declare_id;
 
 mod constants;
@@ -19,15 +22,17 @@ nostd_panic_handler!();
 no_allocator!();
 
 fn process_instruction(
-    _program_id: &Address,     // Address of the account the program was loaded into
+    _program_id: &Address, // Address of the account the program was loaded into
     accounts: &mut [AccountView], // All accounts required to process the instruction
-    instruction_data: &[u8],  // Serialized instruction-specific data
+    instruction_data: &[u8], // Serialized instruction-specific data
 ) -> ProgramResult {
-    let (discriminator, instruction_data) = instruction_data.split_first().ok_or(ProgramError::InvalidInstructionData)?;
+    let (discriminator, instruction_data) = instruction_data
+        .split_first()
+        .ok_or(ProgramError::InvalidInstructionData)?;
     match discriminator {
         0 => Initialize::process(accounts, instruction_data),
         1 => Advance::process(accounts, instruction_data),
         2 => Withdraw::process(accounts, instruction_data),
-        _ => Err(ProgramError::InvalidInstructionData)
+        _ => Err(ProgramError::InvalidInstructionData),
     }
 }
