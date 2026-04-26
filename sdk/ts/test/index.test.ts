@@ -17,6 +17,7 @@ import {
   WinterWalletError,
   WinterWalletClient,
   assertLegacyTransactionSize,
+  createAdvancePlan,
   createWithdrawPlan,
   estimateLegacyTransactionSize,
   withComputeBudget,
@@ -333,13 +334,35 @@ describe("transaction helpers", () => {
 });
 
 describe("shared golden vectors", () => {
-  it("matches the Advance(Withdraw) fixture", () => {
-    const fixture = JSON.parse(
-      readFileSync(
-        new URL("../../../fixtures/advance-withdraw.json", import.meta.url),
-        "utf8"
-      )
+  it("matches the Initialize fixture", () => {
+    const fixture = readFixture("initialize.json");
+    const walletId = hexToBytes(fixture.wallet_id);
+    const nextRoot = hexToBytes(fixture.next_root);
+    const payer = new PublicKey(fixture.payer);
+    const [walletPda, bump] = findWinterWalletPda(walletId);
+
+    expect(walletPda.toBase58()).toBe(fixture.wallet_pda);
+    expect(bump).toBe(fixture.wallet_bump);
+
+    const ix = createInitializeInstruction(
+      payer,
+      walletPda,
+      new Uint8Array(SIGNATURE_LEN),
+      nextRoot
     );
+    expect(ix.data.length).toBe(fixture.instruction_data_len);
+    expect(hex(sha256(ix.data))).toBe(fixture.instruction_data_sha256);
+    expectMetas(ix.keys, fixture.instruction_accounts);
+
+    const txSize = estimateLegacyTransactionSize(
+      payer,
+      withComputeBudget([ix], DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0n)
+    );
+    expect(txSize).toBe(fixture.legacy_transaction_size);
+  });
+
+  it("matches the Advance(Withdraw) fixture", () => {
+    const fixture = readFixture("advance-withdraw.json");
 
     const walletId = hexToBytes(fixture.wallet_id);
     const currentRoot = hexToBytes(fixture.current_root);
@@ -373,7 +396,65 @@ describe("shared golden vectors", () => {
     );
     expect(txSize).toBe(fixture.legacy_transaction_size);
   });
+
+  it("matches the Advance(TokenTransfer) fixture", () => {
+    const fixture = readFixture("advance-token-transfer.json");
+
+    const walletId = hexToBytes(fixture.wallet_id);
+    const currentRoot = hexToBytes(fixture.current_root);
+    const newRoot = hexToBytes(fixture.new_root);
+    const payer = new PublicKey(fixture.payer);
+    const [walletPda, bump] = findWinterWalletPda(walletId);
+    const sourceAta = new PublicKey(fixture.source_ata);
+    const destinationAta = new PublicKey(fixture.destination_ata);
+    const tokenProgram = new PublicKey(fixture.token_program);
+    const amount = BigInt(fixture.amount);
+
+    expect(walletPda.toBase58()).toBe(fixture.wallet_pda);
+    expect(bump).toBe(fixture.wallet_bump);
+
+    const data = new Uint8Array(9);
+    data[0] = 3;
+    new DataView(data.buffer).setBigUint64(1, amount, true);
+    expect(hex(data)).toBe(fixture.inner_instruction_data);
+
+    const inner = new TransactionInstruction({
+      programId: tokenProgram,
+      keys: [
+        { pubkey: sourceAta, isSigner: false, isWritable: true },
+        { pubkey: destinationAta, isSigner: false, isWritable: true },
+        { pubkey: walletPda, isSigner: false, isWritable: false },
+      ],
+      data: Buffer.from(data),
+    });
+    const plan = createAdvancePlan({
+      walletPda,
+      newRoot,
+      innerInstructions: [inner],
+    });
+
+    expect(hex(plan.payload)).toBe(fixture.payload);
+    expectMetas(plan.accounts, fixture.passthrough_accounts);
+    expect(hex(plan.digest(walletId, currentRoot))).toBe(fixture.advance_digest);
+
+    const ix = plan.createInstruction(new Uint8Array(SIGNATURE_LEN));
+    expect(ix.data.length).toBe(fixture.advance_instruction_data_len);
+    expect(hex(sha256(ix.data))).toBe(fixture.advance_instruction_data_sha256);
+    expectMetas(ix.keys, fixture.advance_instruction_accounts);
+
+    const txSize = estimateLegacyTransactionSize(
+      payer,
+      withComputeBudget([ix], DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0n)
+    );
+    expect(txSize).toBe(fixture.legacy_transaction_size);
+  });
 });
+
+function readFixture(name: string): any {
+  return JSON.parse(
+    readFileSync(new URL(`../../../fixtures/${name}`, import.meta.url), "utf8")
+  );
+}
 
 function hex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
