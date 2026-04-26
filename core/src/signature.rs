@@ -69,8 +69,7 @@ impl<const N: usize> WinternitzSignature<N> {
     #[inline(always)]
     pub fn recover_pubkey_prehashed(&self, hash: &[u8; N]) -> WinternitzPubkey<N> {
         const { crate::assert_n::<N>() };
-        let mut pk_scalars: [MaybeUninit<[u8; 32]>; N] =
-            [const { MaybeUninit::uninit() }; N];
+        let mut pk_scalars: [MaybeUninit<[u8; 32]>; N] = [const { MaybeUninit::uninit() }; N];
         let mut checksum_sum: u16 = 0;
         for i in 0..N {
             let b = hash[i];
@@ -83,9 +82,8 @@ impl<const N: usize> WinternitzSignature<N> {
         ];
         // SAFETY: the loop above wrote every slot of `pk_scalars`, and
         // `[MaybeUninit<T>; N]` has the same layout as `[T; N]`.
-        let pk_scalars: [[u8; 32]; N] = unsafe {
-            core::ptr::read(pk_scalars.as_ptr() as *const [[u8; 32]; N])
-        };
+        let pk_scalars: [[u8; 32]; N] =
+            unsafe { core::ptr::read(pk_scalars.as_ptr() as *const [[u8; 32]; N]) };
         WinternitzPubkey::new(pk_scalars, pk_checksum)
     }
 
