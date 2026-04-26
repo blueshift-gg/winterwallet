@@ -44,6 +44,11 @@ impl AdvancePlan {
         })
     }
 
+    /// Wallet PDA this plan targets.
+    pub fn wallet_pda(&self) -> &Address {
+        &self.wallet_pda
+    }
+
     /// Build a plan for the built-in lamport withdraw CPI.
     pub fn withdraw(
         wallet_pda: &Address,

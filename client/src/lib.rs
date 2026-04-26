@@ -27,6 +27,7 @@ mod plan;
 mod preimage;
 mod state;
 pub mod transaction;
+mod wallet;
 
 pub use error::Error;
 pub use instruction::{AdvancePayload, advance, encode_advance, initialize, withdraw};
@@ -38,6 +39,10 @@ pub use transaction::{
     DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, LEGACY_TRANSACTION_SIZE_LIMIT,
     estimate_legacy_transaction_size, set_compute_unit_limit, set_compute_unit_price,
     validate_legacy_transaction_size, validate_payer_only_signers, with_compute_budget,
+};
+pub use wallet::{
+    AdvancePersistence, AdvanceSender, PersistedAdvance, SignedAdvance, SigningPosition,
+    UnsignedAdvance, WinterWallet, token_transfer,
 };
 
 // Re-export commonly used items from winterwallet-common for convenience.

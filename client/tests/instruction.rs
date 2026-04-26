@@ -1,4 +1,5 @@
 use winterwallet_client::*;
+use winterwallet_core::WinternitzKeypair;
 
 #[test]
 fn initialize_instruction_layout() {
@@ -157,4 +158,72 @@ fn advance_plan_estimates_transaction_size_with_compute_budget() {
 
     assert!(size > 0);
     assert!(size <= winterwallet_client::LEGACY_TRANSACTION_SIZE_LIMIT);
+}
+
+#[test]
+fn wallet_state_machine_requires_persistence_before_send() {
+    const MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    let wallet_id = wallet_id_from_mnemonic(MNEMONIC).unwrap();
+    let mut keypair = WinternitzKeypair::from_mnemonic_at(MNEMONIC, 0, 0, 1).unwrap();
+    let current_root = keypair
+        .derive::<WINTERNITZ_SCALARS>()
+        .to_pubkey()
+        .merklize();
+    let next_root = WinternitzKeypair::from_mnemonic_at(MNEMONIC, 0, 0, 2)
+        .unwrap()
+        .derive::<WINTERNITZ_SCALARS>()
+        .to_pubkey()
+        .merklize();
+
+    let account = WinterWalletAccount {
+        id: wallet_id,
+        root: current_root,
+        bump: [255],
+    };
+    let wallet = WinterWallet::from_account(&account, SigningPosition::new(0, 0, 1));
+    let receiver = solana_address::Address::from([3u8; 32]);
+    let unsigned = wallet
+        .withdraw_plan(&receiver, 500_000, next_root.as_bytes())
+        .unwrap();
+
+    let signed = unsigned.sign(&mut keypair).unwrap();
+    assert_eq!(keypair.child(), 2);
+    assert_eq!(signed.next_position().child(), 2);
+
+    struct Store {
+        next_position: Option<SigningPosition>,
+    }
+
+    impl AdvancePersistence for Store {
+        type Error = core::convert::Infallible;
+
+        fn persist_signed_advance(&mut self, advance: &SignedAdvance) -> Result<(), Self::Error> {
+            self.next_position = Some(advance.next_position());
+            Ok(())
+        }
+    }
+
+    struct Sender;
+
+    impl AdvanceSender for Sender {
+        type Error = core::convert::Infallible;
+
+        fn send_persisted_advance(
+            &mut self,
+            advance: &PersistedAdvance,
+        ) -> Result<String, Self::Error> {
+            assert_eq!(advance.signed().next_position().child(), 2);
+            Ok("submitted".to_string())
+        }
+    }
+
+    let mut store = Store {
+        next_position: None,
+    };
+    let persisted = signed.persist(&mut store).unwrap();
+    assert_eq!(store.next_position.unwrap().child(), 2);
+
+    let mut sender = Sender;
+    assert_eq!(persisted.send(&mut sender).unwrap(), "submitted");
 }

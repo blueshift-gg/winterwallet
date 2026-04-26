@@ -13,6 +13,17 @@ pub enum Error {
     /// The on-chain root does not match the expected local root.
     RootMismatch,
 
+    /// The signer is not at the position expected by the planned operation.
+    SignerPositionMismatch {
+        /// Expected `(wallet, parent, child)` position.
+        expected: (u32, u32, u32),
+        /// Actual `(wallet, parent, child)` position.
+        actual: (u32, u32, u32),
+    },
+
+    /// The next signing position cannot be represented.
+    PositionOverflow,
+
     /// The CPI payload exceeds on-chain limits.
     PayloadTooLarge(&'static str),
 
@@ -32,6 +43,12 @@ impl core::fmt::Display for Error {
                 write!(f, "position not found within scan depth {depth}")
             }
             Self::RootMismatch => write!(f, "on-chain root does not match local state"),
+            Self::SignerPositionMismatch { expected, actual } => write!(
+                f,
+                "signer position mismatch: expected ({}, {}, {}), got ({}, {}, {})",
+                expected.0, expected.1, expected.2, actual.0, actual.1, actual.2
+            ),
+            Self::PositionOverflow => write!(f, "signing position overflow"),
             Self::PayloadTooLarge(reason) => write!(f, "payload too large: {reason}"),
             Self::TransactionTooLarge { estimated, limit } => {
                 write!(
