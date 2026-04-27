@@ -587,9 +587,10 @@ describe.skipIf(!process.env.WINTERWALLET_INTEGRATION)(
         await setTokenBalance(RPC_URL, walletPda.toBase58(), mint.toBase58(), Number(s.token_amount) * 10);
         await setTokenBalance(RPC_URL, receiver.toBase58(), mint.toBase58(), 0);
 
+        // Only non-signer, non-program accounts benefit from ALTs.
+        // Invoked programs (programId) are forced into static keys by v0 spec.
         const alt = await createAlt(connection, payer, [
-          walletPda, receiver, WINTERWALLET_PROGRAM_ID, SystemProgram.programId,
-          COMPUTE_BUDGET_PROGRAM_ID, sourceAta, destinationAta, tokenProgram, mint,
+          walletPda, receiver, sourceAta, destinationAta,
         ]);
 
         // ── Withdraw (v0) ──
