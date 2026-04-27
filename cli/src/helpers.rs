@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 use solana_address::Address;
 use solana_instruction::Instruction;
 use winterwallet_client::{
-    AdvanceSender, DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, PersistedAdvance,
-    validate_legacy_transaction_size, validate_payer_only_signers, with_compute_budget,
+    AccountEntry, AdvanceSender, DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, PersistedAdvance,
+    upsert, validate_legacy_transaction_size, validate_payer_only_signers, with_compute_budget,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -35,10 +35,19 @@ pub fn read_keypair(path: &str) -> Result<SigningKey, String> {
 }
 
 pub fn read_mnemonic() -> Result<Zeroizing<String>, String> {
-    let raw = Zeroizing::new(
-        rpassword::prompt_password("Enter mnemonic: ")
-            .map_err(|e| format!("failed to read mnemonic: {e}"))?,
-    );
+    use std::io::IsTerminal;
+    let raw = if std::io::stdin().is_terminal() {
+        Zeroizing::new(
+            rpassword::prompt_password("Enter mnemonic: ")
+                .map_err(|e| format!("failed to read mnemonic: {e}"))?,
+        )
+    } else {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_line(&mut buf)
+            .map_err(|e| format!("failed to read mnemonic from stdin: {e}"))?;
+        Zeroizing::new(buf)
+    };
     Ok(Zeroizing::new(raw.trim().to_string()))
 }
 
@@ -155,7 +164,16 @@ pub fn transaction_preview(
     })
 }
 
-/// Add compute budget, validate size/signers, simulate, sign, send, and confirm.
+/// Maximum CU budget used during simulation to measure actual consumption.
+const SIMULATION_CU_CEILING: u32 = 1_400_000;
+
+/// Simulate with a generous CU ceiling to measure actual consumption, then
+/// rebuild with a tightly padded ComputeBudget before sending.
+///
+/// Winterwallet's Winternitz verification exceeds the default 200k CU limit,
+/// so we can't simulate without a budget instruction (unlike msig-cli).
+/// Instead: simulate with a high ceiling → extract `unitsConsumed` → pad 10%
+/// → rebuild → sign → send.
 pub fn simulate_sign_send(
     rpc_url: &str,
     commitment: &str,
@@ -164,21 +182,23 @@ pub fn simulate_sign_send(
     priority_fee_micro_lamports: u64,
 ) -> Result<String, String> {
     let payer_addr = pubkey(payer);
-    let final_ixs = with_compute_budget(
-        instructions,
-        DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
-        priority_fee_micro_lamports,
-    );
-    validate_payer_only_signers(&payer_addr, &final_ixs).map_err(|e| e.to_string())?;
+    validate_payer_only_signers(&payer_addr, instructions).map_err(|e| e.to_string())?;
+
+    // Phase 1: Simulate with a generous CU ceiling to measure real consumption.
+    let sim_ixs = with_compute_budget(instructions, SIMULATION_CU_CEILING, 0);
+    let blockhash = get_latest_blockhash(rpc_url, commitment)?;
+    let sim_message = build_message(&payer_addr, &sim_ixs, &blockhash);
+    let sim_tx = build_unsigned_wire_tx(&sim_message, 1);
+    let units_consumed = simulate_transaction(rpc_url, commitment, &sim_tx)?;
+
+    // Phase 2: Pad CU with 10% headroom (same formula as msig-cli).
+    let cu_limit = padded_compute_unit_limit(units_consumed);
+
+    // Phase 3: Rebuild with the tight ComputeBudget + priority fee.
+    let final_ixs = with_compute_budget(instructions, cu_limit, priority_fee_micro_lamports);
     validate_legacy_transaction_size(&payer_addr, &final_ixs).map_err(|e| e.to_string())?;
 
-    // Simulate the exact transaction shape with zeroed transaction signatures.
-    let blockhash = get_latest_blockhash(rpc_url, commitment)?;
-    let message = build_message(&payer_addr, &final_ixs, &blockhash);
-    let unsigned_tx = build_unsigned_wire_tx(&message, 1);
-    simulate_transaction(rpc_url, commitment, &unsigned_tx)?;
-
-    // Rebuild with a fresh blockhash before signing.
+    // Fresh blockhash for the real transaction.
     let blockhash = get_latest_blockhash(rpc_url, commitment)?;
     let message = build_message(&payer_addr, &final_ixs, &blockhash);
     let signature = payer.sign(&message);
@@ -190,12 +210,13 @@ pub fn simulate_sign_send(
     Ok(tx_sig)
 }
 
-fn simulate_transaction(rpc_url: &str, commitment: &str, wire_tx: &[u8]) -> Result<(), String> {
+/// Simulate a transaction and return the number of compute units consumed.
+fn simulate_transaction(rpc_url: &str, commitment: &str, wire_tx: &[u8]) -> Result<u64, String> {
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, wire_tx);
     let result = rpc_post(
         rpc_url,
         "simulateTransaction",
-        json!([b64, {"encoding": "base64", "sigVerify": false, "commitment": commitment}]),
+        json!([b64, {"encoding": "base64", "sigVerify": false, "commitment": commitment, "replaceRecentBlockhash": true}]),
     )?;
 
     let err = &result["value"]["err"];
@@ -212,7 +233,20 @@ fn simulate_transaction(rpc_url: &str, commitment: &str, wire_tx: &[u8]) -> Resu
         return Err(format!("simulation failed: {err}\n  {logs}"));
     }
 
-    Ok(())
+    let units_consumed = result["value"]["unitsConsumed"]
+        .as_u64()
+        .ok_or("simulation response missing 'unitsConsumed'")?;
+
+    Ok(units_consumed)
+}
+
+/// Apply 10% headroom to simulated CU consumption, with a 10,000 CU floor.
+///
+/// Formula: `(consumed * 11 + 9) / 10` — same as msig-cli.
+fn padded_compute_unit_limit(units_consumed: u64) -> u32 {
+    let padded = units_consumed.saturating_mul(11).saturating_add(9) / 10;
+    let bounded = padded.max(10_000).min(u64::from(u32::MAX));
+    bounded as u32
 }
 
 pub struct RpcAdvanceSender<'a> {
@@ -346,7 +380,7 @@ fn build_message(
         let prog_idx = accounts
             .iter()
             .position(|a| a.pubkey == ix.program_id)
-            .unwrap() as u8;
+            .expect("program ID missing from account list; upsert bug") as u8;
         msg.push(prog_idx);
 
         encode_compact_u16(&mut msg, ix.accounts.len() as u16);
@@ -354,7 +388,7 @@ fn build_message(
             let idx = accounts
                 .iter()
                 .position(|a| a.pubkey == meta.pubkey)
-                .unwrap() as u8;
+                .expect("account missing from account list; upsert bug") as u8;
             msg.push(idx);
         }
 
@@ -382,25 +416,6 @@ fn build_signed_wire_tx(message: &[u8], signature: &[u8; 64]) -> Vec<u8> {
     tx.extend_from_slice(signature);
     tx.extend_from_slice(message);
     tx
-}
-
-struct AccountEntry {
-    pubkey: Address,
-    is_signer: bool,
-    is_writable: bool,
-}
-
-fn upsert(accounts: &mut Vec<AccountEntry>, pubkey: &Address, is_signer: bool, is_writable: bool) {
-    if let Some(existing) = accounts.iter_mut().find(|a| a.pubkey == *pubkey) {
-        existing.is_signer |= is_signer;
-        existing.is_writable |= is_writable;
-    } else {
-        accounts.push(AccountEntry {
-            pubkey: *pubkey,
-            is_signer,
-            is_writable,
-        });
-    }
 }
 
 fn encode_compact_u16(buf: &mut Vec<u8>, val: u16) {

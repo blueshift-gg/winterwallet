@@ -6,8 +6,9 @@ use crate::Error;
 /// Solana legacy transaction wire-size limit.
 pub const LEGACY_TRANSACTION_SIZE_LIMIT: usize = 1232;
 
-/// Conservative default compute unit limit for WinterWallet Advance transactions.
-pub const DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT: u32 = 400_000;
+/// Default compute unit limit used for dry-run previews where simulation is not
+/// available. Live transactions should use simulation-based CU estimation instead.
+pub const DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT: u32 = 800_000;
 
 /// Build a ComputeBudget `SetComputeUnitLimit` instruction.
 pub fn set_compute_unit_limit(units: u32) -> Instruction {
@@ -97,10 +98,10 @@ fn compute_budget_program_id() -> Address {
 }
 
 #[derive(Clone)]
-struct AccountEntry {
-    pubkey: Address,
-    is_signer: bool,
-    is_writable: bool,
+pub struct AccountEntry {
+    pub pubkey: Address,
+    pub is_signer: bool,
+    pub is_writable: bool,
 }
 
 fn collect_accounts(
@@ -172,7 +173,7 @@ fn legacy_message_size(
     Ok(size)
 }
 
-fn upsert(accounts: &mut Vec<AccountEntry>, pubkey: &Address, is_signer: bool, is_writable: bool) {
+pub fn upsert(accounts: &mut Vec<AccountEntry>, pubkey: &Address, is_signer: bool, is_writable: bool) {
     if let Some(existing) = accounts.iter_mut().find(|a| a.pubkey == *pubkey) {
         existing.is_signer |= is_signer;
         existing.is_writable |= is_writable;

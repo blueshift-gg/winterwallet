@@ -36,9 +36,9 @@ pub use plan::AdvancePlan;
 pub use preimage::{advance_preimage, initialize_preimage};
 pub use state::WinterWalletAccount;
 pub use transaction::{
-    DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, LEGACY_TRANSACTION_SIZE_LIMIT,
+    AccountEntry, DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, LEGACY_TRANSACTION_SIZE_LIMIT,
     estimate_legacy_transaction_size, set_compute_unit_limit, set_compute_unit_price,
-    validate_legacy_transaction_size, validate_payer_only_signers, with_compute_budget,
+    upsert, validate_legacy_transaction_size, validate_payer_only_signers, with_compute_budget,
 };
 pub use wallet::{
     AdvancePersistence, AdvanceSender, PersistedAdvance, SignedAdvance, SigningPosition,

@@ -13,10 +13,16 @@ pub fn run(rpc_url: &str, commitment: &str, json_output: bool) -> Result<(), Str
     let (pda, bump) = find_wallet_address(&wallet_id);
 
     let local_state = state::load(&wallet_id_hex)?;
-    let account = helpers::get_account(rpc_url, commitment, &pda).ok();
+    let account = match helpers::get_account(rpc_url, commitment, &pda) {
+        Ok(account) => Some(account),
+        Err(e) if e.starts_with("account not found") => None,
+        Err(e) => return Err(e),
+    };
     let wallet = account
         .as_ref()
-        .and_then(|account| WinterWalletAccount::from_bytes(&account.data).ok());
+        .map(|a| WinterWalletAccount::from_bytes(&a.data))
+        .transpose()
+        .map_err(|e| format!("corrupted wallet account: {e}"))?;
 
     if json_output {
         println!(

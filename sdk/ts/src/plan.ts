@@ -94,10 +94,6 @@ export class AdvancePlan {
   }
 }
 
-export function createAdvancePlan(params: AdvancePlanParams): AdvancePlan {
-  return new AdvancePlan(params);
-}
-
 export function createWithdrawPlan(params: {
   walletPda: PublicKey;
   receiver: PublicKey;

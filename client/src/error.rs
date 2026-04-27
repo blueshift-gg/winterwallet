@@ -7,9 +7,6 @@ pub enum Error {
     /// A Winternitz cryptographic operation failed.
     Winternitz(winterwallet_core::WinternitzError),
 
-    /// Recovery scan did not find a matching position within the given depth.
-    RecoveryFailed(u32),
-
     /// The on-chain root does not match the expected local root.
     RootMismatch,
 
@@ -39,9 +36,6 @@ impl core::fmt::Display for Error {
         match self {
             Self::InvalidAccountData => write!(f, "invalid account data"),
             Self::Winternitz(e) => write!(f, "winternitz error: {e}"),
-            Self::RecoveryFailed(depth) => {
-                write!(f, "position not found within scan depth {depth}")
-            }
             Self::RootMismatch => write!(f, "on-chain root does not match local state"),
             Self::SignerPositionMismatch { expected, actual } => write!(
                 f,

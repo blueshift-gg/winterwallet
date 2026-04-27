@@ -25,14 +25,6 @@ impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Initialize<'a> {
             return Err(ProgramError::NotEnoughAccountKeys);
         };
 
-        // Safety: We can skip these checks
-        // if !payer.is_signer() {
-        //     return Err(ProgramError::MissingRequiredSignature);
-        // }
-        // if !payer.is_writable() {
-        //     return Err(ProgramError::InvalidAccountData);
-        // }
-
         // Ensure wallet address is uninitialized
         if !wallet.owned_by(&pinocchio_system::ID) {
             return Err(ProgramError::InvalidAccountOwner);
