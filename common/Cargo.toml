@@ -1,0 +1,12 @@
+[package]
+name = "winterwallet-common"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+
+[dependencies]
+solana-address = { workspace = true, features = ["decode"] }

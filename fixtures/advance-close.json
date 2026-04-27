@@ -1,0 +1,54 @@
+{
+  "advance_digest": "51a13ed5085dfce40e731b8a2278086010bbc6c4dc1f9e9d48d82404e5acb1c7",
+  "advance_instruction_accounts": [
+    {
+      "is_signer": false,
+      "is_writable": true,
+      "pubkey": "5FktdEDEBhZjYWArnF6uAeupdMgnwwpjrs5eX5amLJAE"
+    },
+    {
+      "is_signer": false,
+      "is_writable": false,
+      "pubkey": "winter5vMwvf51xrSVPTxbAAD6qiSTmPeRTSizMCQCa"
+    },
+    {
+      "is_signer": false,
+      "is_writable": true,
+      "pubkey": "5FktdEDEBhZjYWArnF6uAeupdMgnwwpjrs5eX5amLJAE"
+    },
+    {
+      "is_signer": false,
+      "is_writable": true,
+      "pubkey": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"
+    }
+  ],
+  "advance_instruction_data_len": 806,
+  "advance_instruction_data_sha256": "5634a84abcd163f937548471b25faa255eb6bcf514429d32089ca50481472921",
+  "current_root": "0202020202020202020202020202020202020202020202020202020202020202",
+  "legacy_transaction_size": 1096,
+  "name": "advance_close_v1",
+  "new_root": "0404040404040404040404040404040404040404040404040404040404040404",
+  "passthrough_accounts": [
+    {
+      "is_signer": false,
+      "is_writable": false,
+      "pubkey": "winter5vMwvf51xrSVPTxbAAD6qiSTmPeRTSizMCQCa"
+    },
+    {
+      "is_signer": false,
+      "is_writable": true,
+      "pubkey": "5FktdEDEBhZjYWArnF6uAeupdMgnwwpjrs5eX5amLJAE"
+    },
+    {
+      "is_signer": false,
+      "is_writable": true,
+      "pubkey": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"
+    }
+  ],
+  "payer": "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN",
+  "payload": "0102010003",
+  "receiver": "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8",
+  "wallet_bump": 250,
+  "wallet_id": "0101010101010101010101010101010101010101010101010101010101010101",
+  "wallet_pda": "5FktdEDEBhZjYWArnF6uAeupdMgnwwpjrs5eX5amLJAE"
+}
