@@ -13,9 +13,9 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 
 [workspace.dependencies]
-winterwallet-common = { path = "common" }
-winterwallet-core = { path = "core" }
-winterwallet-client = { path = "client" }
+winterwallet-common = { path = "common", version = "0.1.0" }
+winterwallet-core = { path = "core", version = "0.1.0" }
+winterwallet-client = { path = "client", version = "0.1.0" }
 solana-sha256-hasher = { version = "3.1.0", default-features = false }
 solana-address = { version = "2.6.0", default-features = false }
 solana-instruction = "3.4"
