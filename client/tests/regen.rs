@@ -201,7 +201,7 @@ fn regen_fixtures() {
     println!("regenerated fixtures in {}", fixtures_dir.display());
 }
 
-/// Generate a signing session fixture with real Winternitz signatures.
+/// Generate signing session fixtures with real Winternitz signatures.
 ///
 /// Run with:
 /// ```text
@@ -210,18 +210,28 @@ fn regen_fixtures() {
 #[test]
 #[ignore]
 fn regen_signing_session() {
-    use winterwallet_client::{initialize_preimage, token_transfer, wallet_id_from_mnemonic};
-    use winterwallet_common::WINTERNITZ_SCALARS;
-    use winterwallet_core::WinternitzKeypair;
-
     let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .join("fixtures");
 
-    // WARNING: This is a well-known BIP-39 test vector.
-    // NEVER fund the derived wallet on mainnet.
-    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    // WARNING: These are well-known BIP-39 test vectors.
+    // NEVER fund the derived wallets on mainnet.
+    let mnemonics = [
+        ("signing-session.json", "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"),
+        ("signing-session-alt1.json", "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"),
+    ];
+
+    for (filename, mnemonic) in mnemonics {
+        generate_signing_session(&fixtures_dir, filename, mnemonic);
+        println!("regenerated {filename}");
+    }
+}
+
+fn generate_signing_session(fixtures_dir: &std::path::Path, filename: &str, mnemonic: &str) {
+    use winterwallet_client::{initialize_preimage, token_transfer, wallet_id_from_mnemonic};
+    use winterwallet_common::WINTERNITZ_SCALARS;
+    use winterwallet_core::WinternitzKeypair;
 
     let wallet_id = wallet_id_from_mnemonic(mnemonic).unwrap();
     let (wallet_pda, bump) = find_wallet_address(&wallet_id);
@@ -232,18 +242,17 @@ fn regen_signing_session() {
     let receiver: Address = "CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8"
         .parse()
         .unwrap();
-    let lamports: u64 = 1_000_000_000; // 1 SOL — must exceed rent-exempt minimum
-    let token_amount: u64 = 1_000_000; // 1 token (6 decimals)
+    let lamports: u64 = 1_000_000_000;
+    let token_amount: u64 = 1_000_000;
     let token_program: Address = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         .parse()
         .unwrap();
-    let mint: Address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" // USDC
+    let mint: Address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
         .parse()
         .unwrap();
     let ata_program: Address = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         .parse()
         .unwrap();
-    // ATAs: PDA([owner, token_program, mint], ATA_PROGRAM)
     let (source_ata, _) = Address::derive_program_address(
         &[wallet_pda.as_array(), token_program.as_array(), mint.as_array()],
         &ata_program,
@@ -257,14 +266,11 @@ fn regen_signing_session() {
 
     let mut keypair = WinternitzKeypair::from_mnemonic(mnemonic, 0).unwrap();
 
-    // ── Session 0: Initialize ────────────────────────────────────────
+    // Session 0: Initialize
     let init_preimage = initialize_preimage();
     let init_digest = solana_sha256_hasher::hashv(&init_preimage).to_bytes();
     let init_sig = keypair.sign_and_increment::<WINTERNITZ_SCALARS>(&init_preimage);
-    let init_next_root = keypair
-        .derive::<WINTERNITZ_SCALARS>()
-        .to_pubkey()
-        .merklize();
+    let init_next_root = keypair.derive::<WINTERNITZ_SCALARS>().to_pubkey().merklize();
 
     let session_0 = json!({
         "position": 0,
@@ -274,9 +280,7 @@ fn regen_signing_session() {
         "digest": hex(&init_digest),
     });
 
-    // ── Session 1: Advance(Withdraw) ─────────────────────────────────
-    // Keypair is at position 1 (will sign here). new_root must be the
-    // root at position 2 — peek ahead without consuming.
+    // Session 1: Advance(Withdraw)
     let current_root_1 = *init_next_root.as_bytes();
     let withdraw_new_root = WinternitzKeypair::from_mnemonic_at(mnemonic, 0, 0, 2)
         .unwrap()
@@ -284,14 +288,7 @@ fn regen_signing_session() {
         .to_pubkey()
         .merklize();
 
-    let plan_1 = AdvancePlan::withdraw(
-        &wallet_pda,
-        &receiver,
-        lamports,
-        withdraw_new_root.as_bytes(),
-    )
-    .unwrap();
-
+    let plan_1 = AdvancePlan::withdraw(&wallet_pda, &receiver, lamports, withdraw_new_root.as_bytes()).unwrap();
     let preimage_1 = plan_1.preimage(&wallet_id, &current_root_1);
     let digest_1 = solana_sha256_hasher::hashv(&preimage_1).to_bytes();
     let sig_1 = keypair.sign_and_increment::<WINTERNITZ_SCALARS>(&preimage_1);
@@ -307,8 +304,7 @@ fn regen_signing_session() {
         "passthrough_accounts": metas_json(plan_1.passthrough_accounts()),
     });
 
-    // ── Session 2: Advance(TokenTransfer) ──────────────────────────────
-    // Keypair is at position 2 (will sign here). new_root = position 3.
+    // Session 2: Advance(TokenTransfer)
     let current_root_2 = *withdraw_new_root.as_bytes();
     let token_new_root = WinternitzKeypair::from_mnemonic_at(mnemonic, 0, 0, 3)
         .unwrap()
@@ -316,20 +312,8 @@ fn regen_signing_session() {
         .to_pubkey()
         .merklize();
 
-    let token_inner = token_transfer(
-        &source_ata,
-        &destination_ata,
-        &wallet_pda,
-        token_amount,
-        &token_program,
-    );
-    let plan_2 = AdvancePlan::new(
-        &wallet_pda,
-        token_new_root.as_bytes(),
-        std::slice::from_ref(&token_inner),
-    )
-    .unwrap();
-
+    let token_inner = token_transfer(&source_ata, &destination_ata, &wallet_pda, token_amount, &token_program);
+    let plan_2 = AdvancePlan::new(&wallet_pda, token_new_root.as_bytes(), std::slice::from_ref(&token_inner)).unwrap();
     let preimage_2 = plan_2.preimage(&wallet_id, &current_root_2);
     let digest_2 = solana_sha256_hasher::hashv(&preimage_2).to_bytes();
     let sig_2 = keypair.sign_and_increment::<WINTERNITZ_SCALARS>(&preimage_2);
@@ -349,8 +333,7 @@ fn regen_signing_session() {
         "passthrough_accounts": metas_json(plan_2.passthrough_accounts()),
     });
 
-    // ── Session 3: Advance(Close) ───────────────────────────────────────
-    // Keypair is at position 3 (will sign here). new_root = position 4.
+    // Session 3: Advance(Close)
     let current_root_3 = *token_new_root.as_bytes();
     let close_new_root = WinternitzKeypair::from_mnemonic_at(mnemonic, 0, 0, 4)
         .unwrap()
@@ -358,9 +341,7 @@ fn regen_signing_session() {
         .to_pubkey()
         .merklize();
 
-    let plan_3 =
-        AdvancePlan::close(&wallet_pda, &receiver, close_new_root.as_bytes()).unwrap();
-
+    let plan_3 = AdvancePlan::close(&wallet_pda, &receiver, close_new_root.as_bytes()).unwrap();
     let preimage_3 = plan_3.preimage(&wallet_id, &current_root_3);
     let digest_3 = solana_sha256_hasher::hashv(&preimage_3).to_bytes();
     let sig_3 = keypair.sign_and_increment::<WINTERNITZ_SCALARS>(&preimage_3);
@@ -391,11 +372,7 @@ fn regen_signing_session() {
         "sessions": [session_0, session_1, session_2, session_3],
     });
 
-    write_pretty(&fixtures_dir.join("signing-session.json"), &value);
-    println!(
-        "regenerated signing-session fixture in {}",
-        fixtures_dir.display()
-    );
+    write_pretty(&fixtures_dir.join(filename), &value);
 }
 
 fn metas_json(metas: &[solana_instruction::AccountMeta]) -> serde_json::Value {

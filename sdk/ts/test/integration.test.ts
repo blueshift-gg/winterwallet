@@ -18,23 +18,29 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
+  AddressLookupTableAccount,
+  AddressLookupTableProgram,
   Connection,
   Keypair,
   PublicKey,
   SystemProgram,
   Transaction,
   TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
   sendAndConfirmTransaction,
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   WINTERWALLET_PROGRAM_ID,
+  COMPUTE_BUDGET_PROGRAM_ID,
   createInitializeInstruction,
   AdvancePlan,
   createWithdrawPlan,
   createClosePlan,
   withComputeBudget,
   estimateLegacyTransactionSize,
+  estimateV0TransactionSize,
   fetchWinterWalletAccount,
 } from "../src/index.js";
 
@@ -167,7 +173,7 @@ async function setTokenBalance(
   }
 }
 
-/** Send a transaction with detailed error logging on failure. */
+/** Send a legacy transaction with detailed error logging on failure. */
 async function sendTx(
   connection: Connection,
   tx: Transaction,
@@ -190,6 +196,79 @@ async function sendTx(
     console.error(`${label} logs:`, logs?.meta?.logMessages);
     throw new Error(`${label} failed: ${JSON.stringify(result.value.err)}`);
   }
+}
+
+/** Send a v0 versioned transaction with ALT lookups. */
+async function sendV0Tx(
+  connection: Connection,
+  instructions: TransactionInstruction[],
+  signers: Keypair[],
+  lookupTables: AddressLookupTableAccount[],
+  label: string,
+): Promise<void> {
+  const { blockhash } = await connection.getLatestBlockhash();
+  const messageV0 = new TransactionMessage({
+    payerKey: signers[0].publicKey,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message(lookupTables);
+  const tx = new VersionedTransaction(messageV0);
+  tx.sign(signers);
+
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: true,
+  });
+  const result = await connection.confirmTransaction(sig, "confirmed");
+  if (result.value.err) {
+    const logs = await connection.getTransaction(sig, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    console.error(`${label} error:`, JSON.stringify(result.value.err));
+    console.error(`${label} logs:`, logs?.meta?.logMessages);
+    throw new Error(`${label} failed: ${JSON.stringify(result.value.err)}`);
+  }
+}
+
+/** Create an on-chain ALT, extend it with addresses, and return it. */
+async function createAlt(
+  connection: Connection,
+  payer: Keypair,
+  addresses: PublicKey[],
+): Promise<AddressLookupTableAccount> {
+  const slot = await connection.getSlot();
+  const [createIx, tableAddress] = AddressLookupTableProgram.createLookupTable({
+    authority: payer.publicKey,
+    payer: payer.publicKey,
+    recentSlot: slot,
+  });
+  const extendIx = AddressLookupTableProgram.extendLookupTable({
+    payer: payer.publicKey,
+    authority: payer.publicKey,
+    lookupTable: tableAddress,
+    addresses,
+  });
+  await sendTx(
+    connection,
+    new Transaction().add(createIx, extendIx),
+    [payer],
+    "Create ALT",
+  );
+
+  // ALTs need one slot to activate. Poll until ready.
+  for (let i = 0; i < 20; i++) {
+    const response = await connection.getAddressLookupTable(tableAddress);
+    if (response.value && response.value.state.addresses.length > 0) {
+      return response.value;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("ALT not active after 10s");
+}
+
+function loadSessionFile(name: string): SigningSession {
+  const path = new URL(`../../../fixtures/${name}`, import.meta.url);
+  return JSON.parse(readFileSync(path, "utf-8"));
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -468,5 +547,109 @@ describe.skipIf(!process.env.WINTERWALLET_INTEGRATION)(
       },
       30_000,
     );
+
+    it(
+      "v0 + ALT: initialize → fund → withdraw → token transfer → close",
+      async () => {
+        const s = loadSessionFile("signing-session-alt1.json");
+        const walletPda = new PublicKey(s.wallet_pda);
+        const walletId = hexToBytes(s.wallet_id);
+        const receiver = new PublicKey(s.receiver);
+        const cuLimit = 1_400_000;
+
+        // ── Initialize (legacy — wallet doesn't exist yet for ALT) ──
+        const initSession = s.sessions[0];
+        const initIx = createInitializeInstruction(
+          payer.publicKey,
+          walletPda,
+          hexToBytes(initSession.signature),
+          hexToBytes(initSession.new_root),
+        );
+        const initIxs = withComputeBudget([initIx], cuLimit);
+        console.log(`[ALT1] Initialize (legacy): ${estimateLegacyTransactionSize(payer.publicKey, initIxs)} bytes`);
+        await sendTx(connection, new Transaction().add(...initIxs), [payer], "ALT1 Initialize");
+
+        const account1 = await fetchWinterWalletAccount(connection, walletId);
+        expect(hex(account1.root)).toBe(initSession.new_root);
+
+        // ── Fund PDA ──
+        const fundIx = SystemProgram.transfer({
+          fromPubkey: payer.publicKey, toPubkey: walletPda, lamports: 10 * LAMPORTS_PER_SOL,
+        });
+        await sendTx(connection, new Transaction().add(fundIx), [payer], "ALT1 Fund PDA");
+
+        // ── Create ALT with all non-signer accounts ──
+        const mint = new PublicKey(s.mint);
+        const sourceAta = new PublicKey(s.source_ata);
+        const destinationAta = new PublicKey(s.destination_ata);
+        const tokenProgram = new PublicKey(s.token_program);
+
+        await setTokenBalance(RPC_URL, walletPda.toBase58(), mint.toBase58(), Number(s.token_amount) * 10);
+        await setTokenBalance(RPC_URL, receiver.toBase58(), mint.toBase58(), 0);
+
+        const alt = await createAlt(connection, payer, [
+          walletPda, receiver, WINTERWALLET_PROGRAM_ID, SystemProgram.programId,
+          COMPUTE_BUDGET_PROGRAM_ID, sourceAta, destinationAta, tokenProgram, mint,
+        ]);
+
+        // ── Withdraw (v0) ──
+        const withdrawSession = s.sessions[1];
+        const withdrawPlan = createWithdrawPlan({
+          walletPda, receiver, lamports: BigInt(s.lamports),
+          newRoot: hexToBytes(withdrawSession.new_root),
+        });
+        const withdrawIxs = withdrawPlan.withComputeBudget(hexToBytes(withdrawSession.signature), cuLimit);
+        const withdrawLegacy = estimateLegacyTransactionSize(payer.publicKey, withdrawIxs);
+        const withdrawV0 = estimateV0TransactionSize(payer.publicKey, withdrawIxs, [alt]);
+        console.log(`[ALT1] Withdraw:        legacy=${withdrawLegacy} v0=${withdrawV0} saved=${withdrawLegacy - withdrawV0} bytes`);
+        await sendV0Tx(connection, withdrawIxs, [payer], [alt], "ALT1 Withdraw");
+
+        const account2 = await fetchWinterWalletAccount(connection, walletId);
+        expect(hex(account2.root)).toBe(withdrawSession.new_root);
+
+        // ── Token Transfer (v0) ──
+        const tokenSession = s.sessions[2];
+        const tokenTransferIx = new TransactionInstruction({
+          programId: tokenProgram,
+          keys: [
+            { pubkey: sourceAta, isSigner: false, isWritable: true },
+            { pubkey: destinationAta, isSigner: false, isWritable: true },
+            { pubkey: walletPda, isSigner: false, isWritable: false },
+          ],
+          data: Buffer.concat([
+            Buffer.from([3]),
+            Buffer.from(new BigUint64Array([BigInt(s.token_amount)]).buffer),
+          ]),
+        });
+        const tokenPlan = new AdvancePlan({
+          walletPda, newRoot: hexToBytes(tokenSession.new_root),
+          innerInstructions: [tokenTransferIx],
+        });
+        const tokenIxs = tokenPlan.withComputeBudget(hexToBytes(tokenSession.signature), cuLimit);
+        const tokenLegacy = estimateLegacyTransactionSize(payer.publicKey, tokenIxs);
+        const tokenV0 = estimateV0TransactionSize(payer.publicKey, tokenIxs, [alt]);
+        console.log(`[ALT1] Token Transfer:  legacy=${tokenLegacy} v0=${tokenV0} saved=${tokenLegacy - tokenV0} bytes`);
+        await sendV0Tx(connection, tokenIxs, [payer], [alt], "ALT1 Token Transfer");
+
+        const account3 = await fetchWinterWalletAccount(connection, walletId);
+        expect(hex(account3.root)).toBe(tokenSession.new_root);
+
+        // ── Close (v0) ──
+        const closeSession = s.sessions[3];
+        const closePlan = createClosePlan({
+          walletPda, receiver, newRoot: hexToBytes(closeSession.new_root),
+        });
+        const closeIxs = closePlan.withComputeBudget(hexToBytes(closeSession.signature), cuLimit);
+        const closeLegacy = estimateLegacyTransactionSize(payer.publicKey, closeIxs);
+        const closeV0 = estimateV0TransactionSize(payer.publicKey, closeIxs, [alt]);
+        console.log(`[ALT1] Close:           legacy=${closeLegacy} v0=${closeV0} saved=${closeLegacy - closeV0} bytes`);
+        await sendV0Tx(connection, closeIxs, [payer], [alt], "ALT1 Close");
+
+        const info = await connection.getAccountInfo(walletPda);
+        expect(info).toBeNull();
+      },
+      120_000,
+    );
+
   },
 );
