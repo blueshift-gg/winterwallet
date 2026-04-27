@@ -5,6 +5,8 @@ members = ["common", "core", "client", "cli", "program"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+authors = ["Dean Little <hi@deanlittle.com>"]
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

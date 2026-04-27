@@ -2,6 +2,9 @@
 name = "winterwallet-common"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared constants, discriminators, domain tags, and account layout for the WinterWallet Winternitz signature program."
 
 [lints]
 workspace = true

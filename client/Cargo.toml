@@ -2,6 +2,9 @@
 name = "winterwallet-client"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Off-chain client helpers for the WinterWallet Solana program: instruction builders, PDAs, transaction planning, and wallet state."
 
 [lints]
 workspace = true

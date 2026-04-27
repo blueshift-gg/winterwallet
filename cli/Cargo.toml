@@ -2,6 +2,9 @@
 name = "winterwallet"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Command-line wallet for WinterWallet: BIP-39 keypair management, Winternitz signing, and Solana transaction submission."
 
 [lints]
 workspace = true

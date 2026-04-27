@@ -2,6 +2,9 @@
 name = "winterwallet-program"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "On-chain Solana program for WinterWallet: Winternitz one-time signature verification and wallet state management."
 
 [lints]
 workspace = true
