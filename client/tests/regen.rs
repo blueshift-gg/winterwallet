@@ -41,7 +41,11 @@ fn regen_fixtures() {
     // ── Initialize ───────────────────────────────────────────────────
     {
         let ix = initialize(&payer, &wallet_pda, &zero_sig, &next_root);
-        let ixs = with_compute_budget(std::slice::from_ref(&ix), DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0);
+        let ixs = with_compute_budget(
+            std::slice::from_ref(&ix),
+            DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
+            0,
+        );
         let tx_size = estimate_legacy_transaction_size(&payer, &ixs).unwrap();
 
         let value = json!({
@@ -66,7 +70,11 @@ fn regen_fixtures() {
         let preimage = plan.preimage(&wallet_id, &current_root);
         let digest = solana_sha256_hasher::hashv(&preimage).to_bytes();
         let ix = plan.instruction(&zero_sig);
-        let ixs = with_compute_budget(std::slice::from_ref(&ix), DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0);
+        let ixs = with_compute_budget(
+            std::slice::from_ref(&ix),
+            DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
+            0,
+        );
         let tx_size = estimate_legacy_transaction_size(&payer, &ixs).unwrap();
 
         let value = json!({
@@ -112,12 +120,22 @@ fn regen_fixtures() {
             .unwrap();
         let amount: u64 = 123_456_789;
 
-        let inner = token_transfer(&source_ata, &destination_ata, &wallet_pda, amount, &token_program);
+        let inner = token_transfer(
+            &source_ata,
+            &destination_ata,
+            &wallet_pda,
+            amount,
+            &token_program,
+        );
         let plan = AdvancePlan::new(&wallet_pda, &new_root, std::slice::from_ref(&inner)).unwrap();
         let preimage = plan.preimage(&wallet_id, &current_root);
         let digest = solana_sha256_hasher::hashv(&preimage).to_bytes();
         let ix = plan.instruction(&zero_sig);
-        let ixs = with_compute_budget(std::slice::from_ref(&ix), DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0);
+        let ixs = with_compute_budget(
+            std::slice::from_ref(&ix),
+            DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
+            0,
+        );
         let tx_size = estimate_legacy_transaction_size(&payer, &ixs).unwrap();
 
         let value = json!({
@@ -153,7 +171,11 @@ fn regen_fixtures() {
         let preimage = plan.preimage(&wallet_id, &current_root);
         let digest = solana_sha256_hasher::hashv(&preimage).to_bytes();
         let ix = plan.instruction(&zero_sig);
-        let ixs = with_compute_budget(std::slice::from_ref(&ix), DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0);
+        let ixs = with_compute_budget(
+            std::slice::from_ref(&ix),
+            DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
+            0,
+        );
         let tx_size = estimate_legacy_transaction_size(&payer, &ixs).unwrap();
 
         let value = json!({
