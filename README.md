@@ -14,7 +14,7 @@ to verify efficiently on Solana while keeping host-side key management ergonomic
   `"Winternitz seed"`. **Not** BIP-32 compatible; no Bitcoin/Solana wallet
   will derive matching scalars. BIP-39 seed computation *is* standard
   (verified against Trezor's test vectors).
-- **Not formally audit (yet).**
+- **Not formally audited (yet).**
 
 ## Layout
 
