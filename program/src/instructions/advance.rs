@@ -180,7 +180,7 @@ fn invoke_next(
         let mut meta = InstructionAccount::from(view);
         // Promote wallet appearances to signer so the inner instruction sees
         // the PDA signature provided by `invoke_signed_with_bounds`.
-        if view.address().as_array() == wallet_address {
+        if view.address().as_array().eq(wallet_address) {
             meta.is_signer = true;
         }
         slot.write(meta);

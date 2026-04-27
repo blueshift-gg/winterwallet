@@ -19,10 +19,16 @@ impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Close<'a> {
             return Err(ProgramError::MissingRequiredSignature);
         }
 
+        // Error if `wallet` and `receiver` are the same account to prevent
+        // permanent destroying our lamports.
+        if wallet.address().eq(receiver.address()) {
+            return Err(ProgramError::InvalidAccountData);
+        }
+
         // Safety: We can technically ignore on-curve keypairs assigned to our
         // program invoking `close` as a top-level instruction, as it isn't
         // dangerous, however this is a simple way to stop them from doing so.
-        if wallet.data_len() == 0 {
+        if wallet.data_len().eq(&0) {
             return Err(ProgramError::InvalidAccountData);
         }
 

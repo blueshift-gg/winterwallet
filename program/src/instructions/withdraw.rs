@@ -29,7 +29,7 @@ impl<'a> TryFrom<(&'a mut [AccountView], &'a [u8])> for Withdraw<'a> {
         // Safety: We can technically ignore on-curve keypairs assigned to our
         // program invoking `withdraw` as a top-level instruction, as it isn't
         // dangerous, however this is a simple way to stop them from doing so.
-        if wallet.data_len() == 0 {
+        if wallet.data_len().eq(&0) {
             return Err(ProgramError::InvalidAccountData);
         }
 
@@ -59,12 +59,16 @@ impl<'a> Withdraw<'a> {
         let balance = self.wallet.lamports();
 
         // Reject withdrawals that would bring the account below rent-exempt.
-        let rent_exempt = Rent::get()?.try_minimum_balance(WinterWallet::LEN)?;
-        if balance.saturating_sub(self.lamports) < rent_exempt {
+        let rent_exempt_lamports = Rent::get()?.try_minimum_balance(WinterWallet::LEN)?;
+        if balance
+            .saturating_sub(self.lamports)
+            .lt(&rent_exempt_lamports)
+        {
             return Err(ProgramError::InsufficientFunds);
         }
 
-        self.wallet.set_lamports(balance - self.lamports);
+        self.wallet
+            .set_lamports(balance.saturating_sub(self.lamports));
         self.receiver
             .set_lamports(self.receiver.lamports().saturating_add(self.lamports));
         Ok(())

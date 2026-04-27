@@ -108,7 +108,7 @@ impl<'a> Initialize<'a> {
 
         let rent_exempt_lamports = Rent::get()?.try_minimum_balance(WinterWallet::LEN)?;
 
-        if lamports == 0 {
+        if lamports.eq(&0) {
             CreateAccount {
                 from: self.payer,
                 to: self.wallet,
@@ -119,7 +119,7 @@ impl<'a> Initialize<'a> {
             .invoke_signed(signers)
         } else {
             // Transfer remaining rent exempt lamports if required
-            if lamports < rent_exempt_lamports {
+            if lamports.lt(&rent_exempt_lamports) {
                 Transfer {
                     from: self.payer,
                     to: self.wallet,
