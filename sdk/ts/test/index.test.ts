@@ -5,6 +5,7 @@ import {
   DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
   SIGNATURE_LEN,
   WINTERWALLET_PROGRAM_ID,
+  COMPUTE_BUDGET_PROGRAM_ID,
   createAdvanceInstruction,
   createCloseInstruction,
   createInitializeInstruction,
@@ -17,13 +18,22 @@ import {
   WinterWalletError,
   WinterWalletClient,
   assertLegacyTransactionSize,
-  createAdvancePlan,
+  assertV0TransactionSize,
+  AdvancePlan,
   createClosePlan,
   createWithdrawPlan,
   estimateLegacyTransactionSize,
+  estimateV0TransactionSize,
   withComputeBudget,
 } from "../src/index.js";
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import {
+  AddressLookupTableAccount,
+  MessageV0,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  VersionedTransaction,
+} from "@solana/web3.js";
 
 describe("deserializeWinterWalletAccount", () => {
   it("deserializes valid 65-byte data", () => {
@@ -372,7 +382,7 @@ describe("transaction helpers", () => {
 
 describe("shared golden vectors", () => {
   it("matches the Initialize fixture", async () => {
-    const fixture = readFixture("initialize.json");
+    const fixture = readFixture<InitializeFixture>("initialize.json");
     const walletId = hexToBytes(fixture.wallet_id);
     const nextRoot = hexToBytes(fixture.next_root);
     const payer = new PublicKey(fixture.payer);
@@ -399,7 +409,7 @@ describe("shared golden vectors", () => {
   });
 
   it("matches the Advance(Withdraw) fixture", async () => {
-    const fixture = readFixture("advance-withdraw.json");
+    const fixture = readFixture<AdvanceFixture>("advance-withdraw.json");
 
     const walletId = hexToBytes(fixture.wallet_id);
     const currentRoot = hexToBytes(fixture.current_root);
@@ -435,7 +445,7 @@ describe("shared golden vectors", () => {
   });
 
   it("matches the Advance(TokenTransfer) fixture", async () => {
-    const fixture = readFixture("advance-token-transfer.json");
+    const fixture = readFixture<AdvanceFixture>("advance-token-transfer.json");
 
     const walletId = hexToBytes(fixture.wallet_id);
     const currentRoot = hexToBytes(fixture.current_root);
@@ -464,7 +474,7 @@ describe("shared golden vectors", () => {
       ],
       data: Buffer.from(data),
     });
-    const plan = createAdvancePlan({
+    const plan = new AdvancePlan({
       walletPda,
       newRoot,
       innerInstructions: [inner],
@@ -487,7 +497,7 @@ describe("shared golden vectors", () => {
   });
 
   it("matches the Advance(Close) fixture", async () => {
-    const fixture = readFixture("advance-close.json");
+    const fixture = readFixture<AdvanceFixture>("advance-close.json");
 
     const walletId = hexToBytes(fixture.wallet_id);
     const currentRoot = hexToBytes(fixture.current_root);
@@ -518,7 +528,192 @@ describe("shared golden vectors", () => {
   });
 });
 
-function readFixture(name: string): any {
+describe("v0 transaction support", () => {
+  function makeLookupTable(addresses: PublicKey[]): AddressLookupTableAccount {
+    return new AddressLookupTableAccount({
+      key: PublicKey.unique(),
+      state: {
+        deactivationSlot: BigInt("18446744073709551615"),
+        lastExtendedSlot: 0,
+        lastExtendedSlotStartIndex: 0,
+        authority: undefined,
+        addresses,
+      },
+    });
+  }
+
+  it("returns smaller size than legacy when ALT resolves accounts", () => {
+    const payer = PublicKey.unique();
+    const walletPda = PublicKey.unique();
+    const receiver = PublicKey.unique();
+    const ix = createWithdrawInstruction(walletPda, receiver, 1n);
+    const instructions = withComputeBudget([ix]);
+
+    const alt = makeLookupTable([
+      WINTERWALLET_PROGRAM_ID,
+      COMPUTE_BUDGET_PROGRAM_ID,
+      SystemProgram.programId,
+      walletPda,
+      receiver,
+    ]);
+
+    const legacySize = estimateLegacyTransactionSize(payer, instructions);
+    const v0Size = estimateV0TransactionSize(payer, instructions, [alt]);
+
+    expect(v0Size).toBeLessThan(legacySize);
+  });
+
+  it("with empty ALT array is slightly larger than legacy (v0 overhead)", () => {
+    const payer = PublicKey.unique();
+    const ix = createWithdrawInstruction(PublicKey.unique(), PublicKey.unique(), 1n);
+    const instructions = withComputeBudget([ix]);
+
+    const legacySize = estimateLegacyTransactionSize(payer, instructions);
+    const v0Size = estimateV0TransactionSize(payer, instructions, []);
+
+    // V0 adds: 1 byte version prefix + 1 byte ALT count = 2 bytes overhead
+    expect(v0Size).toBe(legacySize + 2);
+  });
+
+  it("signer accounts are never placed in ALT lookups", () => {
+    const payer = PublicKey.unique();
+    // Create an ALT that contains the payer (a signer).
+    const alt = makeLookupTable([payer]);
+
+    const ix = createWithdrawInstruction(PublicKey.unique(), PublicKey.unique(), 1n);
+    const instructions = withComputeBudget([ix]);
+
+    // Size should be same as empty ALT since payer can't be resolved.
+    const sizeWithAlt = estimateV0TransactionSize(payer, instructions, [alt]);
+    const sizeNoAlt = estimateV0TransactionSize(payer, instructions, []);
+    expect(sizeWithAlt).toBe(sizeNoAlt);
+  });
+
+  it("invoked programs stay in static keys", () => {
+    const payer = PublicKey.unique();
+    const walletPda = PublicKey.unique();
+    const receiver = PublicKey.unique();
+
+    // ALT contains only program IDs (which are invoked).
+    const altOnlyPrograms = makeLookupTable([
+      WINTERWALLET_PROGRAM_ID,
+      COMPUTE_BUDGET_PROGRAM_ID,
+    ]);
+
+    // ALT that also contains non-program accounts.
+    const altWithAccounts = makeLookupTable([
+      WINTERWALLET_PROGRAM_ID,
+      COMPUTE_BUDGET_PROGRAM_ID,
+      walletPda,
+      receiver,
+    ]);
+
+    const ix = createWithdrawInstruction(walletPda, receiver, 1n);
+    const instructions = withComputeBudget([ix]);
+
+    const sizeProgOnly = estimateV0TransactionSize(payer, instructions, [altOnlyPrograms]);
+    const sizeWithAccounts = estimateV0TransactionSize(payer, instructions, [altWithAccounts]);
+
+    // Including non-program accounts in ALT should reduce size further.
+    expect(sizeWithAccounts).toBeLessThan(sizeProgOnly);
+  });
+
+  it("assertV0TransactionSize throws TRANSACTION_TOO_LARGE", () => {
+    const payer = PublicKey.unique();
+    const ix = createWithdrawInstruction(PublicKey.unique(), PublicKey.unique(), 1n);
+    const instructions = withComputeBudget([ix]);
+
+    // Set a very low limit to trigger the error.
+    expect(() => assertV0TransactionSize(payer, instructions, [], 10)).toThrow(WinterWalletError);
+    try {
+      assertV0TransactionSize(payer, instructions, [], 10);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(WinterWalletError);
+      expect((e as WinterWalletError).code).toBe("TRANSACTION_TOO_LARGE");
+    }
+  });
+
+  it("assertV0TransactionSize returns size when under limit", () => {
+    const payer = PublicKey.unique();
+    const ix = createWithdrawInstruction(PublicKey.unique(), PublicKey.unique(), 1n);
+    const instructions = withComputeBudget([ix]);
+
+    const size = assertV0TransactionSize(payer, instructions, []);
+    expect(size).toBe(estimateV0TransactionSize(payer, instructions, []));
+  });
+
+  it("estimation matches actual VersionedTransaction serialization size", () => {
+    const payer = PublicKey.unique();
+    const walletPda = PublicKey.unique();
+    const receiver = PublicKey.unique();
+
+    const ix = createWithdrawInstruction(walletPda, receiver, 500_000n);
+    const instructions = withComputeBudget([ix]);
+
+    const alt = makeLookupTable([walletPda, receiver]);
+
+    // Build a real v0 transaction to compare.
+    const messageV0 = MessageV0.compile({
+      payerKey: payer,
+      recentBlockhash: "11111111111111111111111111111111",
+      instructions,
+      addressLookupTableAccounts: [alt],
+    });
+    const tx = new VersionedTransaction(messageV0);
+    const actualSize = tx.serialize().length;
+
+    const estimated = estimateV0TransactionSize(payer, instructions, [alt]);
+    expect(estimated).toBe(actualSize);
+  });
+});
+
+interface AccountMetaFixture {
+  pubkey: string;
+  is_signer: boolean;
+  is_writable: boolean;
+}
+
+interface InitializeFixture {
+  name: string;
+  wallet_id: string;
+  wallet_pda: string;
+  wallet_bump: number;
+  payer: string;
+  next_root: string;
+  instruction_data_len: number;
+  instruction_data_sha256: string;
+  instruction_accounts: AccountMetaFixture[];
+  legacy_transaction_size: number;
+}
+
+interface AdvanceFixture {
+  name: string;
+  wallet_id: string;
+  wallet_pda: string;
+  wallet_bump: number;
+  payer: string;
+  current_root: string;
+  new_root: string;
+  payload: string;
+  passthrough_accounts: AccountMetaFixture[];
+  advance_digest: string;
+  advance_instruction_data_len: number;
+  advance_instruction_data_sha256: string;
+  advance_instruction_accounts: AccountMetaFixture[];
+  legacy_transaction_size: number;
+  // Withdraw/Close fields
+  receiver: string;
+  lamports: string;
+  // Token transfer fields
+  amount: string;
+  source_ata: string;
+  destination_ata: string;
+  token_program: string;
+  inner_instruction_data: string;
+}
+
+function readFixture<T = Record<string, unknown>>(name: string): T {
   return JSON.parse(
     readFileSync(new URL(`../../../fixtures/${name}`, import.meta.url), "utf8")
   );
