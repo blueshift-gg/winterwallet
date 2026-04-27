@@ -1,0 +1,15 @@
+# With a `files` whitelist in package.json this acts as a safety belt only —
+# never publish anything outside of `dist/`, README, LICENSE, package.json.
+
+src/
+test/
+fixtures/
+node_modules/
+.gitignore
+.npmignore
+tsconfig.json
+tsconfig.build.json
+vitest.config.*
+*.tsbuildinfo
+*.log
+.DS_Store

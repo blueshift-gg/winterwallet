@@ -3,7 +3,7 @@ use solana_instruction::{AccountMeta, Instruction};
 use winterwallet_common::SIGNATURE_LEN;
 
 use crate::{
-    AdvancePayload, Error, advance, advance_preimage, encode_advance,
+    AdvancePayload, Error, advance, advance_preimage, close, encode_advance,
     transaction::{
         DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, estimate_legacy_transaction_size,
         validate_legacy_transaction_size, with_compute_budget,
@@ -61,6 +61,16 @@ impl AdvancePlan {
             new_root,
             &[withdraw(wallet_pda, receiver, lamports)],
         )
+    }
+
+    /// Build a plan for the built-in close CPI, sweeping all lamports from the
+    /// wallet PDA to `receiver` and tearing the account down.
+    pub fn close(
+        wallet_pda: &Address,
+        receiver: &Address,
+        new_root: &[u8; 32],
+    ) -> Result<Self, Error> {
+        Self::new(wallet_pda, new_root, &[close(wallet_pda, receiver)])
     }
 
     /// The raw Advance payload committed by the signature.

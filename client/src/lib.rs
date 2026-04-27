@@ -30,7 +30,7 @@ pub mod transaction;
 mod wallet;
 
 pub use error::Error;
-pub use instruction::{AdvancePayload, advance, encode_advance, initialize, withdraw};
+pub use instruction::{AdvancePayload, advance, close, encode_advance, initialize, withdraw};
 pub use pda::{find_wallet_address, wallet_id_from_mnemonic};
 pub use plan::AdvancePlan;
 pub use preimage::{advance_preimage, initialize_preimage};

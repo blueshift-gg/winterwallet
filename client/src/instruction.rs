@@ -91,6 +91,23 @@ pub fn withdraw(wallet_pda: &Address, receiver: &Address, lamports: u64) -> Inst
     }
 }
 
+/// Build a Close instruction (for use as an inner CPI inside Advance).
+///
+/// Sweeps all lamports from the wallet PDA to `receiver` and tears down the
+/// account: zeros data length, lamports, and reassigns owner to System.
+/// As with [`withdraw`], pass the result to [`encode_advance`] — do NOT submit
+/// top-level. The wallet PDA is promoted to signer on-chain via `invoke_signed`.
+pub fn close(wallet_pda: &Address, receiver: &Address) -> Instruction {
+    Instruction {
+        program_id: ID,
+        accounts: vec![
+            AccountMeta::new(*wallet_pda, false),
+            AccountMeta::new(*receiver, false),
+        ],
+        data: vec![discriminator::CLOSE],
+    }
+}
+
 // ── CPI payload encoding ─────────────────────────────────────────────
 
 /// The result of encoding inner CPI instructions for the Advance payload.

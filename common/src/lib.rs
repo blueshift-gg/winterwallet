@@ -6,7 +6,7 @@
 
 use solana_address::declare_id;
 
-declare_id!("22222222222222222222222222222222222222222222");
+declare_id!("winter5vMwvf51xrSVPTxbAAD6qiSTmPeRTSizMCQCa");
 
 // ── Winternitz parameters ────────────────────────────────────────────
 
@@ -42,6 +42,8 @@ pub mod discriminator {
     pub const ADVANCE: u8 = 1;
     /// Withdraw lamports (inner CPI via Advance).
     pub const WITHDRAW: u8 = 2;
+    /// Close the wallet, sweeping all lamports to a receiver (inner CPI via Advance).
+    pub const CLOSE: u8 = 3;
 }
 
 // ── Advance limits ───────────────────────────────────────────────────

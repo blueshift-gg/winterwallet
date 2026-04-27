@@ -143,6 +143,22 @@ impl WinterWallet {
         })
     }
 
+    /// Build an unsigned Advance wrapping the built-in close CPI: sweeps all
+    /// lamports to `receiver` and tears the wallet PDA down.
+    pub fn close_plan(
+        &self,
+        receiver: &Address,
+        new_root: &[u8; 32],
+    ) -> Result<UnsignedAdvance, Error> {
+        let plan = AdvancePlan::close(&self.pda, receiver, new_root)?;
+        Ok(UnsignedAdvance {
+            wallet_id: self.id,
+            current_root: self.current_root,
+            position: self.position,
+            plan,
+        })
+    }
+
     /// Build an unsigned Advance wrapping an SPL Token transfer CPI.
     pub fn transfer_plan(
         &self,

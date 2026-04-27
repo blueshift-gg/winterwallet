@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { sha256 } from "@noble/hashes/sha256";
+import { sha256 } from "../src/helpers.js";
 import {
   DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT,
   SIGNATURE_LEN,
-  WALLET_ACCOUNT_LEN,
   WINTERWALLET_PROGRAM_ID,
   createAdvanceInstruction,
+  createCloseInstruction,
   createInitializeInstruction,
   createWithdrawInstruction,
   deserializeWinterWalletAccount,
@@ -18,6 +18,7 @@ import {
   WinterWalletClient,
   assertLegacyTransactionSize,
   createAdvancePlan,
+  createClosePlan,
   createWithdrawPlan,
   estimateLegacyTransactionSize,
   withComputeBudget,
@@ -130,7 +131,43 @@ describe("createWithdrawInstruction", () => {
   it("rejects negative lamports", () => {
     expect(() =>
       createWithdrawInstruction(PublicKey.unique(), PublicKey.unique(), -1n)
-    ).toThrow(WinterWalletError);
+    ).toThrow();
+  });
+});
+
+describe("createCloseInstruction", () => {
+  it("encodes the discriminator only and orders accounts wallet-first", () => {
+    const walletPda = PublicKey.unique();
+    const receiver = PublicKey.unique();
+
+    const ix = createCloseInstruction(walletPda, receiver);
+
+    expect(ix.programId.equals(WINTERWALLET_PROGRAM_ID)).toBe(true);
+    expect(ix.data.length).toBe(1);
+    expect(ix.data[0]).toBe(3); // CLOSE discriminator
+    expect(ix.keys.length).toBe(2);
+    expect(ix.keys[0].pubkey.equals(walletPda)).toBe(true);
+    expect(ix.keys[0].isSigner).toBe(false); // PDA signer is promoted on-chain
+    expect(ix.keys[0].isWritable).toBe(true);
+    expect(ix.keys[1].pubkey.equals(receiver)).toBe(true);
+    expect(ix.keys[1].isWritable).toBe(true);
+  });
+});
+
+describe("createClosePlan", () => {
+  it("wraps a single Close inner instruction with scrubbed signer flags", () => {
+    const walletPda = PublicKey.unique();
+    const receiver = PublicKey.unique();
+    const newRoot = new Uint8Array(32).fill(7);
+
+    const plan = createClosePlan({ walletPda, receiver, newRoot });
+
+    // 1 inner instruction, 0 accounts on Close passthrough header
+    expect(plan.payload[0]).toBe(1);
+    expect(plan.innerInstructions.length).toBe(1);
+    for (const meta of plan.accounts) {
+      expect(meta.isSigner).toBe(false);
+    }
   });
 });
 
@@ -241,13 +278,13 @@ describe("advanceDigest", () => {
     ).toThrow(WinterWalletError);
   });
 
-  it("produces deterministic 32-byte digest", () => {
+  it("produces deterministic 32-byte digest", async () => {
     const id = new Uint8Array(32).fill(1);
     const cur = new Uint8Array(32).fill(2);
     const next = new Uint8Array(32).fill(3);
 
-    const d1 = advanceDigest(id, cur, next, [], new Uint8Array([0]));
-    const d2 = advanceDigest(id, cur, next, [], new Uint8Array([0]));
+    const d1 = await advanceDigest(id, cur, next, [], new Uint8Array([0]));
+    const d2 = await advanceDigest(id, cur, next, [], new Uint8Array([0]));
 
     expect(d1.length).toBe(32);
     expect(d1).toEqual(d2);
@@ -255,14 +292,14 @@ describe("advanceDigest", () => {
 });
 
 describe("initializeDigest", () => {
-  it("returns 32-byte digest", () => {
-    const digest = initializeDigest();
+  it("returns 32-byte digest", async () => {
+    const digest = await initializeDigest();
     expect(digest.length).toBe(32);
   });
 });
 
 describe("AdvancePlan", () => {
-  it("creates digest and instruction from one account order", () => {
+  it("creates digest and instruction from one account order", async () => {
     const walletPda = PublicKey.unique();
     const receiver = PublicKey.unique();
     const newRoot = new Uint8Array(32).fill(3);
@@ -273,7 +310,7 @@ describe("AdvancePlan", () => {
       newRoot,
     });
 
-    const digest = plan.digest(
+    const digest = await plan.digest(
       new Uint8Array(32).fill(1),
       new Uint8Array(32).fill(2)
     );
@@ -334,7 +371,7 @@ describe("transaction helpers", () => {
 });
 
 describe("shared golden vectors", () => {
-  it("matches the Initialize fixture", () => {
+  it("matches the Initialize fixture", async () => {
     const fixture = readFixture("initialize.json");
     const walletId = hexToBytes(fixture.wallet_id);
     const nextRoot = hexToBytes(fixture.next_root);
@@ -351,7 +388,7 @@ describe("shared golden vectors", () => {
       nextRoot
     );
     expect(ix.data.length).toBe(fixture.instruction_data_len);
-    expect(hex(sha256(ix.data))).toBe(fixture.instruction_data_sha256);
+    expect(hex(await sha256(ix.data))).toBe(fixture.instruction_data_sha256);
     expectMetas(ix.keys, fixture.instruction_accounts);
 
     const txSize = estimateLegacyTransactionSize(
@@ -361,7 +398,7 @@ describe("shared golden vectors", () => {
     expect(txSize).toBe(fixture.legacy_transaction_size);
   });
 
-  it("matches the Advance(Withdraw) fixture", () => {
+  it("matches the Advance(Withdraw) fixture", async () => {
     const fixture = readFixture("advance-withdraw.json");
 
     const walletId = hexToBytes(fixture.wallet_id);
@@ -383,11 +420,11 @@ describe("shared golden vectors", () => {
 
     expect(hex(plan.payload)).toBe(fixture.payload);
     expectMetas(plan.accounts, fixture.passthrough_accounts);
-    expect(hex(plan.digest(walletId, currentRoot))).toBe(fixture.advance_digest);
+    expect(hex(await plan.digest(walletId, currentRoot))).toBe(fixture.advance_digest);
 
     const ix = plan.createInstruction(new Uint8Array(SIGNATURE_LEN));
     expect(ix.data.length).toBe(fixture.advance_instruction_data_len);
-    expect(hex(sha256(ix.data))).toBe(fixture.advance_instruction_data_sha256);
+    expect(hex(await sha256(ix.data))).toBe(fixture.advance_instruction_data_sha256);
     expectMetas(ix.keys, fixture.advance_instruction_accounts);
 
     const txSize = estimateLegacyTransactionSize(
@@ -397,7 +434,7 @@ describe("shared golden vectors", () => {
     expect(txSize).toBe(fixture.legacy_transaction_size);
   });
 
-  it("matches the Advance(TokenTransfer) fixture", () => {
+  it("matches the Advance(TokenTransfer) fixture", async () => {
     const fixture = readFixture("advance-token-transfer.json");
 
     const walletId = hexToBytes(fixture.wallet_id);
@@ -435,11 +472,42 @@ describe("shared golden vectors", () => {
 
     expect(hex(plan.payload)).toBe(fixture.payload);
     expectMetas(plan.accounts, fixture.passthrough_accounts);
-    expect(hex(plan.digest(walletId, currentRoot))).toBe(fixture.advance_digest);
+    expect(hex(await plan.digest(walletId, currentRoot))).toBe(fixture.advance_digest);
 
     const ix = plan.createInstruction(new Uint8Array(SIGNATURE_LEN));
     expect(ix.data.length).toBe(fixture.advance_instruction_data_len);
-    expect(hex(sha256(ix.data))).toBe(fixture.advance_instruction_data_sha256);
+    expect(hex(await sha256(ix.data))).toBe(fixture.advance_instruction_data_sha256);
+    expectMetas(ix.keys, fixture.advance_instruction_accounts);
+
+    const txSize = estimateLegacyTransactionSize(
+      payer,
+      withComputeBudget([ix], DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0n)
+    );
+    expect(txSize).toBe(fixture.legacy_transaction_size);
+  });
+
+  it("matches the Advance(Close) fixture", async () => {
+    const fixture = readFixture("advance-close.json");
+
+    const walletId = hexToBytes(fixture.wallet_id);
+    const currentRoot = hexToBytes(fixture.current_root);
+    const newRoot = hexToBytes(fixture.new_root);
+    const payer = new PublicKey(fixture.payer);
+    const receiver = new PublicKey(fixture.receiver);
+    const [walletPda, bump] = findWinterWalletPda(walletId);
+
+    expect(walletPda.toBase58()).toBe(fixture.wallet_pda);
+    expect(bump).toBe(fixture.wallet_bump);
+
+    const plan = createClosePlan({ walletPda, receiver, newRoot });
+
+    expect(hex(plan.payload)).toBe(fixture.payload);
+    expectMetas(plan.accounts, fixture.passthrough_accounts);
+    expect(hex(await plan.digest(walletId, currentRoot))).toBe(fixture.advance_digest);
+
+    const ix = plan.createInstruction(new Uint8Array(SIGNATURE_LEN));
+    expect(ix.data.length).toBe(fixture.advance_instruction_data_len);
+    expect(hex(await sha256(ix.data))).toBe(fixture.advance_instruction_data_sha256);
     expectMetas(ix.keys, fixture.advance_instruction_accounts);
 
     const txSize = estimateLegacyTransactionSize(

@@ -59,6 +59,13 @@ enum Command {
         amount: u64,
     },
 
+    /// Close the wallet via Advance(Close), sweeping all lamports to a receiver.
+    Close {
+        /// Receiver address (base58) for the swept balance.
+        #[arg(long)]
+        to: String,
+    },
+
     /// Transfer SPL tokens from the wallet via Advance(TokenTransfer).
     Transfer {
         /// Recipient owner address (base58). ATA is derived automatically.
@@ -131,6 +138,17 @@ fn main() {
                 keypair_path: keypair,
                 to,
                 amount: *amount,
+                rpc_url: &cli.rpc_url,
+                commitment: &cli.commitment,
+                json_output: cli.json,
+                dry_run: cli.dry_run,
+                priority_fee_micro_lamports: cli.priority_fee,
+            })
+        }),
+        Command::Close { to } => required_keypair(&cli).and_then(|keypair| {
+            commands::close::run(commands::close::RunArgs {
+                keypair_path: keypair,
+                to,
                 rpc_url: &cli.rpc_url,
                 commitment: &cli.commitment,
                 json_output: cli.json,

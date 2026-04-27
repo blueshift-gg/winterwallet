@@ -95,6 +95,59 @@ fn shared_advance_withdraw_vector_matches_rust_client() {
 }
 
 #[test]
+fn shared_advance_close_vector_matches_rust_client() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../fixtures/advance-close.json")).unwrap();
+
+    let wallet_id = hex_32(fixture["wallet_id"].as_str().unwrap());
+    let current_root = hex_32(fixture["current_root"].as_str().unwrap());
+    let new_root = hex_32(fixture["new_root"].as_str().unwrap());
+    let payer: solana_address::Address = fixture["payer"].as_str().unwrap().parse().unwrap();
+    let receiver: solana_address::Address = fixture["receiver"].as_str().unwrap().parse().unwrap();
+
+    let (wallet_pda, bump) = find_wallet_address(&wallet_id);
+    assert_eq!(
+        wallet_pda.to_string(),
+        fixture["wallet_pda"].as_str().unwrap()
+    );
+    assert_eq!(bump, fixture["wallet_bump"].as_u64().unwrap() as u8);
+
+    let plan = AdvancePlan::close(&wallet_pda, &receiver, &new_root).unwrap();
+    assert_eq!(hex(plan.payload()), fixture["payload"].as_str().unwrap());
+
+    assert_account_metas(
+        plan.passthrough_accounts(),
+        fixture["passthrough_accounts"].as_array().unwrap(),
+    );
+
+    let preimage = plan.preimage(&wallet_id, &current_root);
+    let digest = solana_sha256_hasher::hashv(&preimage).to_bytes();
+    assert_eq!(hex(&digest), fixture["advance_digest"].as_str().unwrap());
+
+    let zero_sig = [0u8; SIGNATURE_LEN];
+    let ix = plan.instruction(&zero_sig);
+    assert_eq!(
+        ix.data.len(),
+        fixture["advance_instruction_data_len"].as_u64().unwrap() as usize
+    );
+    assert_eq!(
+        hex(&solana_sha256_hasher::hash(&ix.data).to_bytes()),
+        fixture["advance_instruction_data_sha256"].as_str().unwrap()
+    );
+    assert_account_metas(
+        &ix.accounts,
+        fixture["advance_instruction_accounts"].as_array().unwrap(),
+    );
+
+    let ixs = with_compute_budget(&[ix], DEFAULT_ADVANCE_COMPUTE_UNIT_LIMIT, 0);
+    let tx_size = estimate_legacy_transaction_size(&payer, &ixs).unwrap();
+    assert_eq!(
+        tx_size,
+        fixture["legacy_transaction_size"].as_u64().unwrap() as usize
+    );
+}
+
+#[test]
 fn shared_advance_token_transfer_vector_matches_rust_client() {
     let fixture: Value =
         serde_json::from_str(include_str!("../../fixtures/advance-token-transfer.json")).unwrap();

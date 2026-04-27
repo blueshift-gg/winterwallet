@@ -25,13 +25,14 @@ fn process_instruction(
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let (discriminator, instruction_data) = instruction_data
+    let (disc, instruction_data) = instruction_data
         .split_first()
         .ok_or(ProgramError::InvalidInstructionData)?;
-    match discriminator {
-        0 => Initialize::process(accounts, instruction_data),
-        1 => Advance::process(accounts, instruction_data),
-        2 => Withdraw::process(accounts, instruction_data),
+    match *disc {
+        discriminator::INITIALIZE => Initialize::process(accounts, instruction_data),
+        discriminator::ADVANCE => Advance::process(accounts, instruction_data),
+        discriminator::WITHDRAW => Withdraw::process(accounts, instruction_data),
+        discriminator::CLOSE => Close::process(accounts, instruction_data),
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
